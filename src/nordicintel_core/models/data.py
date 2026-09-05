@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from math import prod
 
 from pydantic import Field, field_validator, model_validator
 
 from ._base import CoreModel
-from .metadata import CANONICAL_ID_PATTERN
+from .metadata import CANONICAL_ID_PATTERN, DatasetMetadata
 
 
 class DimensionSelection(CoreModel):
@@ -63,47 +63,26 @@ class ExplicitSelection(CoreModel):
         return self
 
 
-class DataCube(CoreModel):
-    """Row-major observations over ordered dimensions, with an aligned status channel."""
+class Dataset(DatasetMetadata):
+    """Normalized JSON-stat Dataset returned by an adapter.
 
-    table_id: str
-    language: str
-    dimensions: list[DimensionSelection] = Field(min_length=1)
-    values: list[int | float | Decimal | None]
-    statuses: list[str | None]
+    Metadata responses have an empty value array. Data responses contain one value
+    per cell in dimension/category index order. Status is an optional sparse map
+    keyed by zero-based cell indexes, as in PxWebApi2, not an aligned second array.
+    Wire envelope constants and derived id/size belong to API serialization.
+    """
 
-    @field_validator("language")
-    @classmethod
-    def normalize_language(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError("language must not be blank")
-        return normalized
-
-    @field_validator("table_id")
-    @classmethod
-    def validate_table_id(cls, value: str) -> str:
-        if not CANONICAL_ID_PATTERN.fullmatch(value):
-            raise ValueError("table_id must be a canonical table slug")
-        return value
-
-    @field_validator("statuses")
-    @classmethod
-    def reject_blank_status(cls, value: list[str | None]) -> list[str | None]:
-        if any(status is not None and not status for status in value):
-            raise ValueError("status markers must be nonempty or null")
-        return value
+    value: list[float | None] = Field(default_factory=list)
+    status: dict[str, str] | None = None
 
     @model_validator(mode="after")
-    def validate_shape(self) -> DataCube:
-        codes = [dimension.dimension_code for dimension in self.dimensions]
-        if len(codes) != len(set(codes)):
-            raise ValueError("cube dimensions must be unique")
-        expected = 1
-        for dimension in self.dimensions:
-            expected *= len(dimension.category_codes)
-        if len(self.values) != expected:
-            raise ValueError(f"values length must equal cube cell count {expected}")
-        if len(self.statuses) != expected:
-            raise ValueError(f"statuses length must equal cube cell count {expected}")
+    def validate_values(self) -> Dataset:
+        expected = prod(len(dimension.categories) for dimension in self.dimensions)
+        if self.value and len(self.value) != expected:
+            raise ValueError(f"value length must equal the dimension product {expected}")
+        for key in self.status or {}:
+            if not key.isascii() or not key.isdecimal() or str(int(key)) != key:
+                raise ValueError("status keys must be canonical nonnegative cell indexes")
+            if int(key) >= len(self.value):
+                raise ValueError("status references a cell outside value")
         return self

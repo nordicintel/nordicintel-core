@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from .data import DataCube, ExplicitSelection
+from .data import Dataset, ExplicitSelection
 from .harvest import DiscoveryEntry, DiscoveryResult, DiscoveryScope, LanguageState
 from .metadata import NormalizedTableMetadata
 from .provider import ProviderDefinition
@@ -42,7 +42,7 @@ class NordicIntelAdapter(Protocol):
         self, entry: DiscoveryEntry, languages: Sequence[str]
     ) -> list[NormalizedTableMetadata]: ...
 
-    async def fetch_data(self, selection: ExplicitSelection) -> DataCube: ...
+    async def fetch_data(self, selection: ExplicitSelection) -> Dataset: ...
 
 
 @runtime_checkable

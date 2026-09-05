@@ -13,8 +13,7 @@ A stable, addressable PxApi catalogue resource containing metadata and providing
 _Avoid_: Database table
 
 **Dataset**:
-The JSON-stat representation of a Table's metadata or observations. In persistence, a dataset row
-holds the stable identity and lifecycle of a Table.
+The JSON-stat representation returned for a Table's metadata or requested observations.
 _Avoid_: Snapshot, stored observations
 
 **Adapter**:
@@ -35,6 +34,6 @@ The outcome of processing one upstream Table during a Harvest Job.
 _Avoid_: Task, queue item
 
 **Language Metadata**:
-The labels, notes, ordered dimensions, ordered categories, and comparison state for one language of
-a Table.
+The combined catalogue and Dataset metadata for one language of a Table, including its labels,
+publication details, classifications, notes, dimensions, categories, and statistical extensions.
 _Avoid_: Translation

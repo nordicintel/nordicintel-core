@@ -1,7 +1,7 @@
 """Public model and protocol contracts."""
 
 from .adapters import AdapterFactory, AsyncHttpClient, NordicIntelAdapter
-from .data import DataCube, DimensionSelection, ExplicitSelection
+from .data import Dataset, DimensionSelection, ExplicitSelection
 from .harvest import (
     Diagnostic,
     DiagnosticStage,
@@ -21,6 +21,7 @@ from .harvest import (
 from .metadata import (
     AvailabilityStatus,
     Category,
+    DatasetMetadata,
     Dimension,
     NormalizedTableMetadata,
     ServingMode,
@@ -28,16 +29,42 @@ from .metadata import (
     deterministic_hash,
 )
 from .provider import ProviderDefinition
+from .statistical import (
+    Adjustment,
+    CodelistInformation,
+    Contact,
+    DatasetLinks,
+    DescribedByLink,
+    DimensionExtension,
+    Link,
+    MeasuringType,
+    PathElement,
+    PriceType,
+    PxMetadata,
+    RelatedLink,
+    RelatedLinkExtension,
+    Role,
+    TableCategory,
+    TimeUnit,
+    Unit,
+)
 
 __all__ = [
     "AdapterFactory",
+    "Adjustment",
     "AsyncHttpClient",
     "AvailabilityStatus",
     "Category",
-    "DataCube",
+    "CodelistInformation",
+    "Contact",
+    "Dataset",
+    "DatasetLinks",
+    "DatasetMetadata",
+    "DescribedByLink",
     "Diagnostic",
     "DiagnosticStage",
     "Dimension",
+    "DimensionExtension",
     "DimensionSelection",
     "DiscoveryEntry",
     "DiscoveryResult",
@@ -51,11 +78,22 @@ __all__ = [
     "JobStatus",
     "JobTrigger",
     "LanguageState",
+    "Link",
+    "MeasuringType",
     "NordicIntelAdapter",
     "NormalizedTableMetadata",
+    "PathElement",
+    "PriceType",
     "ProviderDefinition",
+    "PxMetadata",
     "QueueCount",
+    "RelatedLink",
+    "RelatedLinkExtension",
+    "Role",
     "ServingMode",
+    "TableCategory",
     "TableSearchResult",
+    "TimeUnit",
+    "Unit",
     "deterministic_hash",
 ]
