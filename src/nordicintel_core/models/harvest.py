@@ -41,10 +41,31 @@ class DiagnosticStage(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+def _language(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("language must not be blank")
+    return normalized
+
+
 class HarvestRequest(CoreModel):
+    """One requested traversal, of one Provider, in one language.
+
+    A catalogue is not the same set of Tables in every language: a publisher may carry a
+    Table in Swedish and never publish it in English, and the upstream answer for the
+    language it does not have is an error, not an empty result. A run that carried a set
+    of languages therefore had to decide, per Table, which of them that Table actually
+    had - a question no request could answer and no adapter could be asked without
+    inventing a signal for it.
+
+    Naming the language here removes the question instead of answering it. Everything
+    downstream is scoped to it: what discovery enumerates, what absence means, and what a
+    completed job is a statement about.
+    """
+
+    language: str
     table_id: str | None = None
     force: bool = False
-    languages: list[str] | None = None
 
     @field_validator("table_id")
     @classmethod
@@ -53,19 +74,18 @@ class HarvestRequest(CoreModel):
             raise ValueError("table_id must be a canonical table slug")
         return value
 
-    @field_validator("languages")
+    @field_validator("language")
     @classmethod
-    def normalize_languages(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        normalized = sorted({language.strip().lower() for language in value})
-        if not normalized or any(not language for language in normalized):
-            raise ValueError("languages must be omitted or contain nonempty codes")
-        return normalized
+    def normalize_language(cls, value: str) -> str:
+        return _language(value)
 
 
 class DiscoveryScope(CoreModel):
     """The scope one discovery call must enumerate.
+
+    ``language`` is required and is the language the enumeration is *in*, not a filter
+    applied to it: a listing in one language is the complete inventory for that language
+    and says nothing about any other.
 
     ``table_id`` is canonical and belongs to core; an Adapter cannot resolve it. When a
     worker narrows a job to one Table it resolves that identity first and passes the
@@ -74,9 +94,9 @@ class DiscoveryScope(CoreModel):
     provider-wide traversal, which is the only scope allowed to decide absence.
     """
 
+    language: str
     table_id: str | None = None
     native_table_id: str | None = None
-    languages: list[str]
 
     @field_validator("table_id")
     @classmethod
@@ -92,42 +112,40 @@ class DiscoveryScope(CoreModel):
             raise ValueError("native_table_id must not be blank")
         return value
 
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        return _language(value)
+
     @model_validator(mode="after")
     def validate_single_table_scope(self) -> DiscoveryScope:
         if self.native_table_id is not None and self.table_id is None:
             raise ValueError("native_table_id requires the canonical table_id it resolves to")
         return self
 
-    @field_validator("languages")
-    @classmethod
-    def normalize_languages(cls, value: list[str]) -> list[str]:
-        normalized = list(dict.fromkeys(language.strip().lower() for language in value))
-        if not normalized or any(not language for language in normalized):
-            raise ValueError("languages must contain nonempty codes")
-        return normalized
-
 
 class DiscoveryEntry(CoreModel):
+    """One Table found in the scope's language.
+
+    Membership of the enumeration is the statement that this Table exists in that
+    language, so there is nothing further to declare about which languages it has.
+    """
+
     native_table_id: str = Field(min_length=1)
-    available_languages: list[str] | None = None
     marker: dict[str, Any] | None = None
     fetch_parameters: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("available_languages")
-    @classmethod
-    def normalize_languages(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        normalized = list(dict.fromkeys(language.strip().lower() for language in value))
-        if not normalized or any(not language for language in normalized):
-            raise ValueError("available_languages must contain nonempty codes")
-        return normalized
-
 
 class DiscoveryResult(CoreModel):
+    """The Tables one discovery call found in ``scope.language``.
+
+    A discovery says what is there. It deliberately says nothing about what is missing:
+    nothing in this system acts on a Table's absence, so no flag here claims the
+    enumeration was complete enough to be trusted with that.
+    """
+
     scope: DiscoveryScope
     entries: list[DiscoveryEntry]
-    authoritative: bool
 
     @model_validator(mode="after")
     def validate_unique_entries(self) -> DiscoveryResult:
@@ -137,19 +155,9 @@ class DiscoveryResult(CoreModel):
         return self
 
 
-class InventoryReconciliation(CoreModel):
-    """The identity changes an authoritative discovery justified.
-
-    ``restored`` and ``retired`` name canonical Tables whose absence flag changed. Both
-    are consequences of presence in the inventory alone, so they are decided even for
-    Tables whose metadata was skipped as unchanged during the same Harvest Job.
-    """
-
-    restored: list[str] = Field(default_factory=list)
-    retired: list[str] = Field(default_factory=list)
-
-
 class LanguageState(CoreModel):
+    """What is known about one Table in one language."""
+
     language: str
     comparison_marker: dict[str, Any] | None = None
     content_hash: str | None = None
@@ -208,11 +216,29 @@ class HarvestItem(CoreModel):
 
 
 class HarvestSchedule(CoreModel):
+    """One recurring traversal of one Provider in one language.
+
+    A Provider served in two languages has two schedules. They can run on different
+    intervals, and one being disabled or failing does not silently stop the other.
+    """
+
     provider_id: str
+    language: str
     enabled: bool
     every_seconds: int = Field(gt=0)
     next_run_at: datetime
     request: HarvestRequest
+
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        return _language(value)
+
+    @model_validator(mode="after")
+    def validate_request_language(self) -> HarvestSchedule:
+        if self.request.language != self.language:
+            raise ValueError("a schedule's request must name the schedule's own language")
+        return self
 
 
 class QueueCount(CoreModel):

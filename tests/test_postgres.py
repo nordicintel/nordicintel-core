@@ -24,11 +24,7 @@ from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
     Diagnostic,
     DiagnosticStage,
-    DiscoveryEntry,
-    DiscoveryResult,
-    DiscoveryScope,
     HarvestRequest,
-    InventoryReconciliation,
     ItemStatus,
     JobStatus,
     MetadataFetchResult,
@@ -110,7 +106,7 @@ def metadata(
 
 def start_job(session: Session, provider_id: str = "scb") -> int:
     queue = HarvestRepository(session)
-    queued = queue.enqueue(provider_id, HarvestRequest())
+    queued = queue.enqueue(provider_id, HarvestRequest(language="sv"))
     claimed = queue.claim()
     assert claimed is not None and claimed.id == queued.id
     return claimed.id
@@ -158,7 +154,7 @@ def test_search_indexes_dimension_and_category_labels() -> None:
         assert [result.table_id for result in repository.search("Region")] == ["scb-tab1"]
 
 
-def test_retired_and_discontinued_tables_leave_the_default_search() -> None:
+def test_discontinued_tables_stay_in_the_default_search() -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
         job_id = start_job(session)
@@ -166,16 +162,24 @@ def test_retired_and_discontinued_tables_leave_the_default_search() -> None:
         repository.upsert_language(job_id, metadata())
         assert len(repository.search("Befolkning")) == 1
         with session.begin():
-            session.execute(text("UPDATE table_registry SET retired = true"))
-        assert repository.search("Befolkning") == []
-        assert len(repository.search("Befolkning", include_discontinued=True)) == 1
-        with session.begin():
-            session.execute(
-                text("UPDATE table_registry SET retired = false"),
-            )
             session.execute(text("UPDATE table_metadata SET discontinued = true"))
-        assert repository.search("Befolkning") == []
-        assert len(repository.search("Befolkning", include_discontinued=True)) == 1
+        # The publisher says this series is finished. It is still real, still harvested,
+        # and still the right answer to a search for it, so it is still returned.
+        assert len(repository.search("Befolkning")) == 1
+        assert repository.search("Befolkning")[0].discontinued is True
+        # Excluding it is available, and is the caller's decision to make.
+        assert repository.search("Befolkning", include_discontinued=False) == []
+
+
+def test_operator_and_availability_controls_still_hide_a_table() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(job_id, metadata())
+        repository.set_operator_disabled("scb-tab1", True)
+        # An operator's decision is ours and is enforced whatever the caller asks for.
+        assert repository.search("Befolkning", include_discontinued=True) == []
 
 
 def test_language_failure_does_not_invalidate_successful_language_state() -> None:
@@ -234,48 +238,16 @@ def test_first_language_failure_has_state_without_metadata() -> None:
         assert not repository.load_language_state("scb-tab1")["en"].failed
 
 
-def test_retirement_requires_authoritative_provider_wide_discovery() -> None:
+def test_a_table_missing_from_a_later_run_keeps_its_metadata_and_stays_searchable() -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
         job_id = start_job(session)
         repository = MetadataRepository(session)
         repository.upsert_language(job_id, metadata())
-        incomplete = DiscoveryResult(
-            scope=DiscoveryScope(languages=["sv"]), entries=[], authoritative=False
-        )
-        with pytest.raises(ValueError, match="authoritative"):
-            repository.reconcile_inventory(job_id, "scb", incomplete)
-        single_table = DiscoveryResult(
-            scope=DiscoveryScope(table_id="scb-tab1", native_table_id="TAB1", languages=["sv"]),
-            entries=[DiscoveryEntry(native_table_id="TAB1")],
-            authoritative=True,
-        )
-        with pytest.raises(ValueError, match="authoritative"):
-            repository.reconcile_inventory(job_id, "scb", single_table)
-        authoritative = incomplete.model_copy(update={"authoritative": True})
-        assert repository.reconcile_inventory(job_id, "scb", authoritative) == (
-            InventoryReconciliation(restored=[], retired=["scb-tab1"])
-        )
-
-
-def test_reappearance_restores_a_retired_table_without_new_metadata() -> None:
-    with owner() as session:
-        ProviderRepository(session).upsert(provider("scb"))
-        job_id = start_job(session)
-        repository = MetadataRepository(session)
-        repository.upsert_language(job_id, metadata())
-        empty = DiscoveryResult(
-            scope=DiscoveryScope(languages=["sv"]), entries=[], authoritative=True
-        )
-        assert repository.reconcile_inventory(job_id, "scb", empty).retired == ["scb-tab1"]
-        present = empty.model_copy(update={"entries": [DiscoveryEntry(native_table_id="TAB1")]})
-        # The Table is unchanged upstream, so this run accepts no metadata at all.
-        reconciled = repository.reconcile_inventory(job_id, "scb", present)
-        assert reconciled == InventoryReconciliation(restored=["scb-tab1"], retired=[])
-        table = repository.get_table("scb-tab1")
-        assert table is not None and table.retired is False
-        # Reconciling the same inventory twice reports no further change.
-        assert repository.reconcile_inventory(job_id, "scb", present) == InventoryReconciliation()
+        # Nothing observes a Table's absence, so a run that simply does not mention it
+        # again leaves it exactly as it was. There is no flag to check and none to clear.
+        assert repository.get_table("scb-tab1") is not None
+        assert repository.search("Befolkning")[0].table_id == "scb-tab1"
 
 
 def test_native_lookup_resolves_the_identity_a_slug_cannot() -> None:
@@ -306,9 +278,9 @@ def test_queue_serializes_provider_but_skips_to_free_provider() -> None:
         providers.upsert(provider("scb"))
         providers.upsert(provider("ssb"))
         queue = HarvestRepository(setup)
-        first = queue.enqueue("scb", HarvestRequest())
-        queue.enqueue("scb", HarvestRequest(force=True))
-        third = queue.enqueue("ssb", HarvestRequest())
+        first = queue.enqueue("scb", HarvestRequest(language="sv"))
+        queue.enqueue("scb", HarvestRequest(language="sv", force=True))
+        third = queue.enqueue("ssb", HarvestRequest(language="sv"))
 
     with owner() as owner_one, owner() as owner_two:
         claimed_one = HarvestRepository(owner_one).claim()
@@ -325,12 +297,12 @@ def test_item_lifecycle_idempotency_and_cancellation() -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
         queue = HarvestRepository(session)
-        job = queue.enqueue("scb", HarvestRequest(languages=["SV"]), request_key="same")
+        job = queue.enqueue("scb", HarvestRequest(language="SV"), request_key="same")
         assert (
-            queue.enqueue("scb", HarvestRequest(languages=["sv"]), request_key="same").id == job.id
+            queue.enqueue("scb", HarvestRequest(language="sv"), request_key="same").id == job.id
         )
         with pytest.raises(AdmissionError, match="another request"):
-            queue.enqueue("scb", HarvestRequest(force=True), request_key="same")
+            queue.enqueue("scb", HarvestRequest(language="sv", force=True), request_key="same")
         claimed = queue.claim()
         assert claimed is not None
         item = queue.begin_item(claimed.id, "TAB1")
@@ -387,7 +359,7 @@ def test_disabling_a_provider_can_cascade_to_its_unfinished_jobs() -> None:
         ProviderRepository(session).upsert(provider("scb"))
         queue = HarvestRepository(session)
         running = start_job(session)
-        queued = queue.enqueue("scb", HarvestRequest(force=True))
+        queued = queue.enqueue("scb", HarvestRequest(language="sv", force=True))
         ProviderRepository(session).set_enabled("scb", False)
         cascaded = {job.id: job for job in queue.cancel_provider_jobs("scb")}
         assert cascaded[queued.id].status is JobStatus.CANCELLED
@@ -403,7 +375,7 @@ def test_cancelled_queued_job_cannot_be_claimed() -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
         queue = HarvestRepository(session)
-        job = queue.enqueue("scb", HarvestRequest())
+        job = queue.enqueue("scb", HarvestRequest(language="sv"))
         assert queue.cancel(job.id).status is JobStatus.CANCELLED
         assert queue.claim() is None
 
@@ -418,7 +390,7 @@ def test_concurrent_idempotent_admission_returns_one_job() -> None:
             barrier.wait()
             return (
                 HarvestRepository(session)
-                .enqueue("scb", HarvestRequest(languages=["sv"]), request_key="concurrent")
+                .enqueue("scb", HarvestRequest(language="sv"), request_key="concurrent")
                 .id
             )
 
@@ -446,7 +418,7 @@ def test_schedule_is_atomic_and_stale_job_recovers_after_owner_disconnect() -> N
             enabled=True,
             every_seconds=60,
             next_run_at=datetime.now(UTC) - timedelta(minutes=1),
-            request=HarvestRequest(),
+            request=HarvestRequest(language="sv"),
         )
         jobs = ScheduleRepository(setup).enqueue_due()
         assert len(jobs) == 1
@@ -522,7 +494,7 @@ def test_no_transaction_is_left_open_between_operations() -> None:
             lambda: providers.get("scb"),
             lambda: providers.list(),
             lambda: providers.set_enabled("scb", True),
-            lambda: queue.enqueue("scb", HarvestRequest()),
+            lambda: queue.enqueue("scb", HarvestRequest(language="sv")),
             lambda: queue.list_jobs(),
             lambda: queue.queue_counts(),
             lambda: queue.claim(),

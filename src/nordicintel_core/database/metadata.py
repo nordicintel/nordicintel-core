@@ -13,8 +13,6 @@ from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
     AvailabilityStatus,
     Diagnostic,
-    DiscoveryResult,
-    InventoryReconciliation,
     LanguageState,
     MetadataFetchResult,
     ServingMode,
@@ -48,16 +46,21 @@ def _table(row: TableRecord) -> TableModel:
         provider_id=row.provider_id,
         native_table_id=row.native_table_id,
         serving_mode=ServingMode(row.serving_mode),
-        retired=row.retired,
         operator_disabled=row.operator_disabled,
         availability_status=AvailabilityStatus(row.availability_status),
     )
 
 
 def _published(include_discontinued: bool) -> ColumnElement[bool]:
+    """Whether a result is shown when the caller has not asked for everything.
+
+    A catalogue answers with what it has. A Table the publisher marked as finished is
+    still real, still harvested and still the right answer to a search for it, so
+    excluding it is the caller's decision to make and never the default.
+    """
     if include_discontinued:
         return literal(True)
-    return ~TableRecord.retired & ~func.coalesce(TableMetadata.discontinued, False)
+    return ~func.coalesce(TableMetadata.discontinued, False)
 
 
 class MetadataRepository:
@@ -96,7 +99,7 @@ class MetadataRepository:
         Discovery yields upstream identifiers, and :func:`canonical_slug` is not a lookup:
         a collision appends a suffix, so a reconstructed slug can name a different Table
         or no Table at all. Only the stored ``(provider_id, native_table_id)`` pair is
-        authoritative, and ``None`` means the Table has never been accepted.
+        resolves it, and ``None`` means the Table has never been accepted.
         """
         with self.session.begin():
             row = self.session.scalar(
@@ -208,7 +211,7 @@ class MetadataRepository:
         query: str,
         *,
         language: str | None = None,
-        include_discontinued: bool = False,
+        include_discontinued: bool = True,
         limit: int = 50,
         offset: int = 0,
     ) -> list[TableSearchResult]:
@@ -412,44 +415,3 @@ class MetadataRepository:
             )
         if updated is None:
             raise AdmissionError(404, "Table does not exist")
-
-    def reconcile_inventory(
-        self, job_id: int, provider_id: str, discovery: DiscoveryResult
-    ) -> InventoryReconciliation:
-        """Make stored absence agree with one complete inventory. Never call it after a partial one.
-
-        Presence decides ``retired`` on its own. Acceptance is not enough, because a Table
-        whose metadata is unchanged is skipped, and a Table that reappears after being
-        retired would otherwise stay retired until its content happened to change. Both
-        directions therefore run here, in one transaction, from the same inventory.
-
-        Only ``retired`` is written: the publisher's ``discontinued`` flag and the
-        operator's controls describe different decisions and are never inferred from
-        presence.
-        """
-        if not discovery.authoritative or discovery.scope.table_id is not None:
-            raise ValueError("absence-based reconciliation requires authoritative discovery")
-        seen = [entry.native_table_id for entry in discovery.entries]
-        with self.session.begin():
-            self._assert_owner(job_id, provider_id)
-            restored = self.session.scalars(
-                update(TableRecord)
-                .where(
-                    TableRecord.provider_id == provider_id,
-                    TableRecord.native_table_id.in_(seen),
-                    TableRecord.retired,
-                )
-                .values(retired=False, updated_at=func.now())
-                .returning(TableRecord.id)
-            ).all()
-            retired = self.session.scalars(
-                update(TableRecord)
-                .where(
-                    TableRecord.provider_id == provider_id,
-                    TableRecord.native_table_id.not_in(seen),
-                    ~TableRecord.retired,
-                )
-                .values(retired=True, updated_at=func.now())
-                .returning(TableRecord.id)
-            ).all()
-        return InventoryReconciliation(restored=sorted(restored), retired=sorted(retired))

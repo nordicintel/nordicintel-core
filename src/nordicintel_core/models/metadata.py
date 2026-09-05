@@ -149,7 +149,6 @@ class TableRecord(CoreModel):
     provider_id: str
     native_table_id: str
     serving_mode: ServingMode
-    retired: bool
     operator_disabled: bool
     availability_status: AvailabilityStatus
 

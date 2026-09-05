@@ -103,6 +103,7 @@ def _item(row: ItemRow) -> HarvestItem:
 def _schedule(row: ScheduleRow) -> HarvestSchedule:
     return HarvestSchedule(
         provider_id=row.provider_id,
+        language=row.language,
         enabled=row.enabled,
         every_seconds=row.every_seconds,
         next_run_at=row.next_run_at,
@@ -167,6 +168,7 @@ class HarvestRepository:
                 pg_insert(JobRow)
                 .values(
                     provider_id=provider_id,
+                    language=request.language,
                     request=request_json,
                     trigger=trigger.value,
                     request_key=request_key,
@@ -193,6 +195,7 @@ class HarvestRepository:
         self,
         *,
         provider_id: str | None = None,
+        language: str | None = None,
         status: JobStatus | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -201,6 +204,8 @@ class HarvestRepository:
         statement = select(JobRow)
         if provider_id is not None:
             statement = statement.where(JobRow.provider_id == provider_id)
+        if language is not None:
+            statement = statement.where(JobRow.language == language.strip().lower())
         if status is not None:
             statement = statement.where(JobRow.status == status.value)
         statement = (
@@ -571,9 +576,9 @@ class ScheduleRepository:
         if not released:
             raise OwnershipLost("Scheduler lock is not owned by this connection")
 
-    def get(self, provider_id: str) -> HarvestSchedule | None:
+    def get(self, provider_id: str, language: str) -> HarvestSchedule | None:
         with self.session.begin():
-            row = self.session.get(ScheduleRow, provider_id)
+            row = self.session.get(ScheduleRow, (provider_id, language.strip().lower()))
             return None if row is None else _schedule(row)
 
     def upsert(
@@ -585,34 +590,47 @@ class ScheduleRepository:
         next_run_at: datetime,
         request: HarvestRequest,
     ) -> HarvestSchedule:
+        """Create or replace the schedule for ``request.language``.
+
+        The language is not a separate argument: it is already in the request, and two
+        places to state it would be two places to disagree.
+        """
         if every_seconds <= 0:
             raise ValueError("every_seconds must be positive")
         if request.table_id is not None:
             raise ValueError("scheduled requests must be provider-wide")
         values: dict[str, Any] = {
             "provider_id": provider_id,
+            "language": request.language,
             "enabled": enabled,
             "every_seconds": every_seconds,
             "next_run_at": next_run_at,
             "request": request.model_dump(mode="json"),
         }
+        keys = {"provider_id", "language"}
         statement = (
             pg_insert(ScheduleRow)
             .values(**values)
             .on_conflict_do_update(
-                index_elements=[ScheduleRow.provider_id],
-                set_={name: value for name, value in values.items() if name != "provider_id"},
+                index_elements=[ScheduleRow.provider_id, ScheduleRow.language],
+                set_={name: value for name, value in values.items() if name not in keys},
             )
             .returning(ScheduleRow)
         )
         with self.session.begin():
             return _schedule(self.session.scalars(statement).one())
 
-    def list_schedules(self, *, limit: int = 50, offset: int = 0) -> list[HarvestSchedule]:
+    def list_schedules(
+        self, *, provider_id: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[HarvestSchedule]:
         limit, offset = page(limit, offset)
+        statement = select(ScheduleRow)
+        if provider_id is not None:
+            statement = statement.where(ScheduleRow.provider_id == provider_id)
         statement = (
-            select(ScheduleRow)
-            .order_by(ScheduleRow.next_run_at, ScheduleRow.provider_id)
+            statement.order_by(
+                ScheduleRow.next_run_at, ScheduleRow.provider_id, ScheduleRow.language
+            )
             .limit(limit)
             .offset(offset)
         )
@@ -620,9 +638,15 @@ class ScheduleRepository:
             return [_schedule(row) for row in self.session.scalars(statement)]
 
     def enqueue_due(self, *, limit: int = 100) -> list[HarvestJob]:
-        """Enqueue one job per idle due provider and advance every due schedule.
+        """Enqueue one job per idle due schedule and advance every due schedule.
 
-        A busy provider keeps its turn without accumulating one job per missed tick.
+        "Busy" is per Provider *and* language, not per Provider. Two languages of one
+        Provider are two different traversals, and treating the second as a duplicate of
+        the first would starve it: the earlier language would win every tick forever.
+        Execution is still serialized by the provider lock, so the two simply queue.
+
+        A schedule that is genuinely still queued or running keeps its turn without
+        accumulating one job per missed tick.
         """
         limit, _ = page(limit, 0)
         jobs: list[HarvestJob] = []
@@ -635,7 +659,9 @@ class ScheduleRepository:
                     Provider.enabled,
                     ScheduleRow.next_run_at <= func.now(),
                 )
-                .order_by(ScheduleRow.next_run_at, ScheduleRow.provider_id)
+                .order_by(
+                    ScheduleRow.next_run_at, ScheduleRow.provider_id, ScheduleRow.language
+                )
                 .limit(limit)
                 .with_for_update(of=ScheduleRow, skip_locked=True)
             ).all()
@@ -645,6 +671,7 @@ class ScheduleRepository:
                     .select_from(JobRow)
                     .where(
                         JobRow.provider_id == schedule.provider_id,
+                        JobRow.language == schedule.language,
                         JobRow.status.in_(_ACTIVE_STATUSES),
                     )
                     .limit(1)
@@ -654,6 +681,7 @@ class ScheduleRepository:
                         pg_insert(JobRow)
                         .values(
                             provider_id=schedule.provider_id,
+                            language=schedule.language,
                             request=schedule.request,
                             trigger=JobTrigger.SCHEDULE.value,
                             request_key=None,

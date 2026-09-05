@@ -86,8 +86,9 @@ class Provider(Base):
 class TableRecord(Base):
     """Canonical identity, operator controls and worker-owned availability.
 
-    ``retired`` records absence after an authoritative discovery. It is deliberately
-    distinct from the publisher's ``table_metadata.discontinued`` flag.
+    Nothing here records a Table's absence. A Table that stops appearing upstream keeps
+    its identity and its stored metadata, and stays visible; deciding what absence means
+    is a judgement this system does not currently make.
     """
 
     __tablename__ = "table_registry"
@@ -96,7 +97,6 @@ class TableRecord(Base):
     provider_id: Mapped[str] = mapped_column(ForeignKey("provider.id"))
     native_table_id: Mapped[str] = mapped_column(Text)
     serving_mode: Mapped[str] = mapped_column(Text, server_default=text("'routed'"))
-    retired: Mapped[bool] = mapped_column(server_default=text("false"))
     operator_disabled: Mapped[bool] = mapped_column(server_default=text("false"))
     availability_status: Mapped[str] = mapped_column(Text, server_default=text("'available'"))
     failed_languages: Mapped[list[str]] = mapped_column(
@@ -180,7 +180,10 @@ class TableMetadata(Base):
 
 
 class TableLanguageState(Base):
-    """Comparison state exists even when a language has never harvested successfully."""
+    """Per-language comparison state.
+
+    A row exists even when a language has never harvested successfully.
+    """
 
     __tablename__ = "table_language_state"
     table_id: Mapped[str] = mapped_column(
@@ -203,25 +206,30 @@ class TableLanguageState(Base):
 
 
 class HarvestSchedule(Base):
+    """One recurring traversal, of one Provider, in one language.
+
+    The language is part of the key because it is part of the work: a Provider serving
+    two languages has two inventories to keep current, and folding them into one row
+    would make one of them invisible.
+    """
+
     __tablename__ = "harvest_schedule"
 
     provider_id: Mapped[str] = mapped_column(ForeignKey("provider.id"), primary_key=True)
+    language: Mapped[str] = mapped_column(Text, primary_key=True)
     enabled: Mapped[bool] = mapped_column(server_default=text("true"))
     every_seconds: Mapped[int] = mapped_column()
     next_run_at: Mapped[datetime] = mapped_column()
-    request: Mapped[dict[str, Any]] = mapped_column(
-        _JSONB,
-        # Built rather than written as a JSON literal: text() would read ':null' as a
-        # bind parameter, both here and in the revision autogenerate renders from it.
-        server_default=text(
-            "jsonb_build_object('table_id', NULL, 'force', false, 'languages', NULL)"
-        ),
-    )
+    request: Mapped[dict[str, Any]] = mapped_column(_JSONB)
 
     __table_args__ = (
         CheckConstraint("every_seconds > 0", name="every_seconds"),
         CheckConstraint(
-            f"{_jsonb_object('request')} AND request->'table_id' = 'null'::jsonb",
+            "length(language) > 0 AND language = lower(btrim(language))", name="language"
+        ),
+        CheckConstraint(
+            f"{_jsonb_object('request')} AND request->'table_id' = 'null'::jsonb "
+            "AND request->>'language' = language",
             name="request",
         ),
         Index("harvest_schedule_due_idx", "next_run_at", postgresql_where=text("enabled")),
@@ -239,6 +247,10 @@ class HarvestJob(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     provider_id: Mapped[str] = mapped_column(ForeignKey("provider.id"))
+    # Mirrors request->>'language'. A column rather than a JSON expression because
+    # admission has to ask "is this Provider already busy in this language?" on every
+    # enqueue, and that question deserves an index.
+    language: Mapped[str] = mapped_column(Text)
     request: Mapped[dict[str, Any]] = mapped_column(_JSONB)
     trigger: Mapped[str] = mapped_column(Text, server_default=text("'manual'"))
     request_key: Mapped[str | None] = mapped_column(Text, unique=True)
@@ -252,7 +264,13 @@ class HarvestJob(Base):
     error: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
 
     __table_args__ = (
-        CheckConstraint(_jsonb_object("request"), name="request"),
+        CheckConstraint(
+            f"{_jsonb_object('request')} AND request->>'language' = language",
+            name="request",
+        ),
+        CheckConstraint(
+            "length(language) > 0 AND language = lower(btrim(language))", name="language"
+        ),
         CheckConstraint("trigger IN ('manual', 'schedule')", name="trigger"),
         CheckConstraint(
             "request_key IS NULL OR length(request_key) BETWEEN 1 AND 200", name="request_key"
@@ -276,6 +294,12 @@ class HarvestJob(Base):
             "created_at",
             "id",
             postgresql_where=text("status = 'queued'"),
+        ),
+        Index(
+            "harvest_job_active_language_idx",
+            "provider_id",
+            "language",
+            postgresql_where=text("status IN ('queued', 'running')"),
         ),
         Index(
             "harvest_job_one_running_provider_idx",

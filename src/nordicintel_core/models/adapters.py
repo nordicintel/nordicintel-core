@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from nordicintel_core.jsonstat import JsonStatDataset
@@ -27,22 +27,42 @@ class AsyncHttpClient(Protocol):
 
 @runtime_checkable
 class NordicIntelAdapter(Protocol):
-    async def resolve_languages(self, requested: Sequence[str] | None) -> list[str]: ...
+    """One Provider integration, for the duration of one job.
 
-    async def discover(self, scope: DiscoveryScope) -> DiscoveryResult: ...
+    Every method except :meth:`supported_languages` and :meth:`fetch_data` operates in
+    the single language the job named. Nothing here chooses a language or reports which
+    languages a Table has: a Table appearing in the inventory of a language is the whole
+    of that statement.
+    """
 
-    async def languages_to_refresh(
-        self,
-        entry: DiscoveryEntry,
-        stored: Mapping[str, LanguageState],
-        requested: Sequence[str],
-        *,
-        force: bool,
-    ) -> list[str]: ...
+    async def supported_languages(self) -> list[str]:
+        """Every language this Provider publishes, for scheduling and for validation."""
+        ...
+
+    async def discover(self, scope: DiscoveryScope) -> DiscoveryResult:
+        """Enumerate the scope, in ``scope.language``."""
+        ...
+
+    async def should_refresh(
+        self, entry: DiscoveryEntry, stored: LanguageState | None, *, force: bool
+    ) -> bool:
+        """Decide whether this Table's metadata has to be fetched again.
+
+        ``stored`` is None when this Table has never been accepted in this language. Only
+        the adapter knows what its own marker means, so only the adapter answers this.
+        """
+        ...
 
     async def fetch_metadata(
-        self, entry: DiscoveryEntry, languages: Sequence[str]
-    ) -> list[MetadataFetchResult]: ...
+        self, entry: DiscoveryEntry, language: str
+    ) -> MetadataFetchResult:
+        """Return this Table's complete representation in one language.
+
+        One call, one language, one result. Failure is raised, not represented as an
+        empty or partial list, so a caller never has to decide what a missing element in
+        a returned collection was supposed to mean.
+        """
+        ...
 
     async def fetch_data(
         self, native_table_id: str, selection: ExplicitSelection
