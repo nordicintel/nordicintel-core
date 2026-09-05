@@ -120,6 +120,44 @@ class TableLanguageMetadata(LanguageMetadata):
         return value
 
 
+class TableCatalogEntry(TableCatalogMetadata):
+    """One catalogue row suitable for public listing responses."""
+
+    table_id: str
+    provider_id: str
+    language: str
+
+    @field_validator("table_id")
+    @classmethod
+    def validate_table_id(cls, value: str) -> str:
+        if not CANONICAL_ID_PATTERN.fullmatch(value):
+            raise ValueError("table_id must be a canonical table identifier")
+        return value
+
+    @field_validator("provider_id")
+    @classmethod
+    def validate_provider_id(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not CANONICAL_ID_PATTERN.fullmatch(value):
+            raise ValueError("provider_id must be a canonical identifier")
+        return value
+
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not value:
+            raise ValueError("language must not be blank")
+        return value
+
+
+class TableCatalogPage(CoreModel):
+    """A page of catalogue rows with the total count for pagination."""
+
+    total: int = Field(ge=0)
+    items: list[TableCatalogEntry]
+
+
 class MetadataFetchResult(CoreModel):
     """Adapter output; core establishes canonical identity when accepting it."""
 

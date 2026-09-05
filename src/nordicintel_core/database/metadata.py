@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 
 from sqlalchemy import ColumnElement, case, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -16,7 +17,9 @@ from nordicintel_core.models import (
     LanguageState,
     MetadataFetchResult,
     ServingMode,
+    TableCatalogEntry,
     TableCatalogMetadata,
+    TableCatalogPage,
     TableLanguageMetadata,
     TableSearchResult,
     deterministic_hash,
@@ -61,6 +64,37 @@ def _published(include_discontinued: bool) -> ColumnElement[bool]:
     if include_discontinued:
         return literal(True)
     return ~func.coalesce(TableMetadata.discontinued, False)
+
+
+def _search_result_rows(rows: Sequence[object]) -> list[TableSearchResult]:
+    return [
+        TableSearchResult(
+            table_id=row.id,
+            provider_id=row.provider_id,
+            language=row.language,
+            label=row.label,
+            description=row.description,
+            discontinued=row.discontinued,
+            operator_disabled=row.operator_disabled,
+            availability_status=AvailabilityStatus(row.availability_status),
+            rank=row.rank,
+        )
+        for row in rows
+    ]
+
+
+def _catalog_entry_rows(rows: Sequence[object]) -> list[TableCatalogEntry]:
+    return [
+        TableCatalogEntry.model_validate(
+            {
+                "table_id": row.table_id,
+                "provider_id": row.provider_id,
+                "language": row.language,
+                **{name: getattr(row, name) for name in _CATALOG_COLUMNS},
+            }
+        )
+        for row in rows
+    ]
 
 
 class MetadataRepository:
@@ -206,6 +240,58 @@ class MetadataRepository:
             if updated is None:
                 raise AdmissionError(404, "Table language does not exist")
 
+    def catalog(
+        self,
+        query: str | None = None,
+        *,
+        language: str | None = None,
+        include_discontinued: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> TableCatalogPage:
+        """List the public catalogue, or search it when the caller supplies text.
+
+        A blank query is not an error here: the caller asked for the catalogue itself,
+        not specifically for search behavior.
+        """
+        limit, offset = page(limit, offset)
+        has_query = query is not None and bool(query.strip())
+        tsquery = func.websearch_to_tsquery("simple", query) if has_query else None
+        statement = (
+            select(
+                TableRecord.id.label("table_id"),
+                TableRecord.provider_id,
+                TableMetadata.language,
+                *(getattr(TableMetadata, name) for name in _CATALOG_COLUMNS),
+            )
+            .join(TableMetadata, TableMetadata.table_id == TableRecord.id)
+            .join(Provider, Provider.id == TableRecord.provider_id)
+            .where(
+                _published(include_discontinued),
+                ~TableRecord.operator_disabled,
+                TableRecord.availability_status == "available",
+                Provider.enabled,
+            )
+        )
+        if language is not None:
+            statement = statement.where(TableMetadata.language == language.strip().lower())
+        if has_query:
+            rank = func.ts_rank(TableMetadata.search_document, tsquery)
+            statement = statement.where(
+                TableMetadata.search_document.bool_op("@@")(tsquery)
+            ).order_by(rank.desc(), TableRecord.id, TableMetadata.language)
+        else:
+            statement = statement.order_by(TableRecord.id, TableMetadata.language)
+        with self.session.begin():
+            total = int(
+                self.session.scalar(
+                    select(func.count()).select_from(statement.order_by(None).subquery())
+                )
+                or 0
+            )
+            rows = self.session.execute(statement.limit(limit).offset(offset)).all()
+            return TableCatalogPage(total=total, items=_catalog_entry_rows(rows))
+
     def search(
         self,
         query: str,
@@ -248,21 +334,7 @@ class MetadataRepository:
         if language is not None:
             statement = statement.where(TableMetadata.language == language.strip().lower())
         with self.session.begin():
-            rows = self.session.execute(statement).all()
-            return [
-                TableSearchResult(
-                    table_id=row.id,
-                    provider_id=row.provider_id,
-                    language=row.language,
-                    label=row.label,
-                    description=row.description,
-                    discontinued=row.discontinued,
-                    operator_disabled=row.operator_disabled,
-                    availability_status=AvailabilityStatus(row.availability_status),
-                    rank=row.rank,
-                )
-                for row in rows
-            ]
+            return _search_result_rows(self.session.execute(statement).all())
 
     def upsert_language(self, job_id: int, result: MetadataFetchResult) -> str:
         """Accept the Dataset, catalog, search projection and marker together."""

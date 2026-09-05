@@ -154,6 +154,80 @@ def test_search_indexes_dimension_and_category_labels() -> None:
         assert [result.table_id for result in repository.search("Region")] == ["scb-tab1"]
 
 
+def test_catalog_lists_visible_tables_when_query_is_blank() -> None:
+    with owner() as session:
+        providers = ProviderRepository(session)
+        providers.upsert(provider("scb"))
+        providers.upsert(provider("ssb"))
+        scb_job = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(scb_job, metadata())
+        repository.upsert_language(
+            scb_job,
+            metadata(provider_id="scb", table_id="scb-tab2", label="Arbetslöshet"),
+        )
+        repository.upsert_language(scb_job, metadata(language="en", label="Population"))
+
+        ssb_job = HarvestRepository(session).enqueue("ssb", HarvestRequest(language="sv")).id
+        claimed = HarvestRepository(session).claim()
+        assert claimed is not None and claimed.id == ssb_job
+        repository.upsert_language(
+            claimed.id,
+            metadata(provider_id="ssb", table_id="ssb-tab9", label="Sysselsetting"),
+        )
+        repository.record_failure(
+            claimed.id,
+            "ssb-tab9",
+            Diagnostic(code="timeout", message="Timeout"),
+            language="sv",
+        )
+        HarvestRepository(session).finish_job(claimed.id, JobStatus.COMPLETED)
+        HarvestRepository(session).release_provider("ssb")
+        repository.set_operator_disabled("scb-tab2", True)
+
+        page = repository.catalog("   ")
+        assert page.total == 3
+        assert [(row.table_id, row.language, row.label) for row in page.items] == [
+            ("scb-tab1", "en", "Population"),
+            ("scb-tab1", "sv", "Befolkning"),
+            ("ssb-tab9", "sv", "Sysselsetting"),
+        ]
+
+
+def test_catalog_supports_language_filter_pagination_and_discontinued_switch() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(job_id, metadata(table_id="scb-tab1", label="Befolkning"))
+        repository.upsert_language(job_id, metadata(table_id="scb-tab2", label="Arbete"))
+        repository.upsert_language(
+            job_id,
+            metadata(table_id="scb-tab2", language="en", label="Employment"),
+        )
+        with session.begin():
+            session.execute(
+                text("UPDATE table_metadata SET discontinued = true WHERE table_id = 'scb-tab2'")
+            )
+
+        first_sv = repository.catalog(language="sv", limit=1, offset=0)
+        second_sv = repository.catalog(language="sv", limit=1, offset=1)
+        english = repository.catalog(language="en")
+        visible = repository.catalog(include_discontinued=False)
+        searched = repository.catalog("Employment", language="en")
+
+        assert first_sv.total == 2
+        assert [row.table_id for row in first_sv.items] == ["scb-tab1"]
+        assert second_sv.total == 2
+        assert [row.table_id for row in second_sv.items] == ["scb-tab2"]
+        assert english.total == 1
+        assert [row.table_id for row in english.items] == ["scb-tab2"]
+        assert visible.total == 1
+        assert [row.table_id for row in visible.items] == ["scb-tab1"]
+        assert searched.total == 1
+        assert [row.table_id for row in searched.items] == ["scb-tab2"]
+
+
 def test_discontinued_tables_stay_in_the_default_search() -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
@@ -298,9 +372,7 @@ def test_item_lifecycle_idempotency_and_cancellation() -> None:
         ProviderRepository(session).upsert(provider("scb"))
         queue = HarvestRepository(session)
         job = queue.enqueue("scb", HarvestRequest(language="SV"), request_key="same")
-        assert (
-            queue.enqueue("scb", HarvestRequest(language="sv"), request_key="same").id == job.id
-        )
+        assert queue.enqueue("scb", HarvestRequest(language="sv"), request_key="same").id == job.id
         with pytest.raises(AdmissionError, match="another request"):
             queue.enqueue("scb", HarvestRequest(language="sv", force=True), request_key="same")
         claimed = queue.claim()

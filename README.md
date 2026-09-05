@@ -3,6 +3,13 @@
 Shared contracts and infrastructure for NordicIntel applications and provider
 adapters. The package contains no web service or background process of its own.
 
+## Start here
+
+- `docs/workspace-architecture.md` — quickest map of the full four-repo workspace
+- `CONTEXT.md` — canonical domain vocabulary used across the NordicIntel repos
+- `docs/database.md` — schema ownership, repositories, and engine/session rules
+- `docs/onboarding/core-domain-and-persistence.md` — source-backed onboarding note for this repository
+
 Table metadata composes catalog attributes with the shared JSON-stat 2.0 Dataset
 defined in `nordicintel_core.jsonstat`. Metadata Datasets have `value: []`; live data uses the same
 Dataset type with observations. Tables have a stable canonical ID and a provider/native
