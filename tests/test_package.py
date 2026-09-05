@@ -1,7 +1,9 @@
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import nordicintel_core
-from nordicintel_core.database.sql_files import read_migration, read_query
 
 
 def test_root_exports_only_compatibility_metadata() -> None:
@@ -13,15 +15,27 @@ def test_root_exports_only_compatibility_metadata() -> None:
     assert nordicintel_core.SCHEMA_HEAD == "0001_initial"
 
 
-def test_sql_resources_are_available_and_names_are_validated() -> None:
-    assert "CREATE TABLE provider" in read_migration("0001_initial.up.sql")
-    assert "INSERT INTO provider" in read_query("provider_upsert.sql")
-    try:
-        read_query("../secret.sql")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unsafe resource name was accepted")
+def test_migration_assets_ship_with_the_package() -> None:
+    """The migration task installs the wheel, so these are not just checkout files."""
+    root = Path(nordicintel_core.__file__).parent / "database" / "migrations"
+    assert (root / "env.py").is_file()
+    assert (root / "script.py.mako").is_file()
+    assert (root / "versions" / "0001_initial.py").is_file()
+
+
+def test_models_import_without_sqlalchemy() -> None:
+    """Adapters depend on the contracts alone; only the `db` extra pulls in SQLAlchemy."""
+    program = (
+        "import sys;"
+        "sys.modules['sqlalchemy'] = None;"
+        "import nordicintel_core.models as m;"
+        "print(m.NormalizedTableMetadata.__name__)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "NormalizedTableMetadata"
 
 
 def test_import_does_not_read_database_environment() -> None:

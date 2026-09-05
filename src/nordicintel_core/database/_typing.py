@@ -1,11 +1,6 @@
-"""Internal row and connection aliases."""
+"""Shared pagination bounds for repository reads."""
 
 from __future__ import annotations
-
-from typing import Any, TypeAlias
-
-Row: TypeAlias = dict[str, Any]
-Connection: TypeAlias = Any
 
 
 def page(limit: int, offset: int) -> tuple[int, int]:

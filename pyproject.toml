@@ -14,7 +14,7 @@ dependencies = ["pydantic>=2.10,<3"]
 
 [project.optional-dependencies]
 http = ["httpx>=0.27,<1"]
-db = ["psycopg[binary]>=3.2,<4"]
+db = ["psycopg[binary]>=3.2,<4", "sqlalchemy>=2.0,<3"]
 migrations = [
   "alembic>=1.14,<2",
   "psycopg[binary]>=3.2,<4",
@@ -63,6 +63,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic writes these; reflowing generated DDL by hand on every revision is churn.
+"src/nordicintel_core/database/migrations/versions/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

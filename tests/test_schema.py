@@ -1,177 +1,234 @@
-"""Test the rewritten definitions directly, without the deferred repository queries."""
+"""Guard the schema against drift.
+
+The declarative model is the definition; the migration is what actually reaches a
+database. These tests assert the two agree, and that the constraints Alembic's
+autogenerate cannot reliably diff are really present.
+"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
 from typing import Any
-from uuid import uuid4
 
 import pytest
-from psycopg import Connection, sql
-from psycopg.types.json import Jsonb
+from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.runtime.migration import MigrationContext
+from sqlalchemy import CheckConstraint, Connection, text
+from sqlalchemy.orm import Session
 from test_models import rich_metadata
 
-from nordicintel_core.database import connect
-from nordicintel_core.database.sql_files import read_migration
-from nordicintel_core.models import Category, Dimension, NormalizedTableMetadata
+from nordicintel_core.database import create_owner_engine
+from nordicintel_core.database.migration_cli import _configuration
+from nordicintel_core.database.schema import (
+    Base,
+    Category,
+    DatasetMetadata,
+    Dimension,
+)
+from nordicintel_core.models import Category as CategoryModel
+from nordicintel_core.models import Dimension as DimensionModel
+from nordicintel_core.models import NormalizedTableMetadata
 
-pytestmark = pytest.mark.postgres
-
-
-@pytest.fixture
-def schema() -> Iterator[Connection[dict[str, Any]]]:
-    url = os.environ.get("NORDICINTEL_TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("NORDICINTEL_TEST_DATABASE_URL is not configured")
-    with connect(url) as connection, connection.transaction(force_rollback=True):
-        name = sql.Identifier("model_schema_" + uuid4().hex)
-        connection.execute(sql.SQL("CREATE SCHEMA {}").format(name))
-        connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(name))
-        connection.execute(read_migration("0001_initial.up.sql"))
-        yield connection
-
-
-def columns(connection: Connection[dict[str, Any]], table: str) -> set[str]:
-    return {
-        row["column_name"]
-        for row in connection.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = current_schema() AND table_name = %s",
-            (table,),
-        )
-    }
+IDENTITY_FIELDS = {"provider_id", "table_id", "native_table_id", "aliases", "dimensions"}
+PERSISTENCE_COLUMNS = {
+    "dataset_id",
+    "content_hash",
+    "last_checked_at",
+    "last_harvested_at",
+    "search_document",
+}
 
 
-def test_definitions_cover_the_models(schema: Connection[dict[str, Any]]) -> None:
-    identity = {"provider_id", "table_id", "native_table_id", "aliases", "dimensions"}
-    persistence = {
-        "dataset_id",
-        "content_hash",
-        "last_checked_at",
-        "last_harvested_at",
-        "search_document",
-    }
+def columns(table: str) -> set[str]:
+    return {column.name for column in Base.metadata.tables[table].columns}
+
+
+def test_definitions_cover_the_models() -> None:
+    """Every model field has a column and every column has a field, with no database."""
     assert (
-        columns(schema, "dataset_metadata")
-        == (set(NormalizedTableMetadata.model_fields) - identity) | persistence
+        columns("dataset_metadata")
+        == (set(NormalizedTableMetadata.model_fields) - IDENTITY_FIELDS) | PERSISTENCE_COLUMNS
     )
-    assert columns(schema, "dimension") == (set(Dimension.model_fields) - {"categories"}) | {
+    assert columns("dimension") == (set(DimensionModel.model_fields) - {"categories"}) | {
         "dataset_id",
         "language",
     }
-    assert columns(schema, "category") == set(Category.model_fields) | {
+    assert columns("category") == set(CategoryModel.model_fields) | {
         "dataset_id",
         "language",
         "dimension_code",
     }
-    assert "retired" in columns(schema, "dataset")
-    assert "discontinued" not in columns(schema, "dataset")
-    assert not {"value", "status", "size", "ordinal"} & columns(schema, "dataset_metadata")
+    assert "retired" in columns("dataset")
+    assert "discontinued" not in columns("dataset")
+    assert not {"value", "status", "size", "ordinal"} & columns("dataset_metadata")
 
 
-def insert(
-    connection: Connection[dict[str, Any]],
-    table: str,
-    values: dict[str, Any],
-    json_fields: set[str],
-) -> None:
-    """Test-only direct inserts; deliberately do not exercise deferred repositories."""
-    connection.execute(
-        sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-            sql.Identifier(table),
-            sql.SQL(", ").join(map(sql.Identifier, values)),
-            sql.SQL(", ").join(sql.Placeholder() for _ in values),
-        ),
-        [
-            Jsonb(value) if name in json_fields and value is not None else value
-            for name, value in values.items()
-        ],
+def test_every_check_constraint_is_named() -> None:
+    """An unnamed check cannot be asserted in the database or matched across revisions."""
+    unnamed = [
+        (table.name, str(constraint.sqltext))
+        for table in Base.metadata.tables.values()
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name is None
+    ]
+    assert unnamed == []
+
+
+def database_url() -> str:
+    value = os.environ.get("NORDICINTEL_TEST_DATABASE_URL")
+    if not value:
+        pytest.skip("NORDICINTEL_TEST_DATABASE_URL is not configured")
+    return value
+
+
+@pytest.fixture
+def migrated() -> Iterator[Connection]:
+    """A database built the way deployment builds it: by running the migration.
+
+    Everything happens inside one transaction that is always rolled back, so a shared
+    test database is left exactly as it was found even though the schema is rebuilt.
+    """
+    engine = create_owner_engine(database_url())
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
+            config = _configuration(database_url())
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+            yield connection
+        finally:
+            transaction.rollback()
+    engine.dispose()
+
+
+@pytest.mark.postgres
+def test_migration_produces_exactly_the_declared_schema(migrated: Connection) -> None:
+    """The drift guard: a migration that no longer builds the model fails here."""
+    context = MigrationContext.configure(migrated)
+    assert compare_metadata(context, Base.metadata) == []
+
+
+@pytest.mark.postgres
+def test_named_check_constraints_reach_the_database(migrated: Connection) -> None:
+    """Autogenerate does not reliably diff CHECKs, so assert them against pg_constraint."""
+    expected = {
+        constraint.name
+        for table in Base.metadata.tables.values()
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    actual = set(
+        migrated.scalars(
+            text(
+                "SELECT conname FROM pg_constraint AS c "
+                "JOIN pg_namespace AS n ON n.oid = c.connamespace "
+                "WHERE c.contype = 'c' AND n.nspname = 'public'"
+            )
+        )
     )
+    assert expected <= actual
 
 
-def test_complete_metadata_storage(schema: Connection[dict[str, Any]]) -> None:
+@pytest.mark.postgres
+def test_declared_indexes_reach_the_database(migrated: Connection) -> None:
+    expected = {
+        index.name for table in Base.metadata.tables.values() for index in table.indexes
+    }
+    actual = set(
+        migrated.scalars(
+            text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
+        )
+    )
+    assert expected <= actual
+
+
+@pytest.mark.postgres
+def test_complete_metadata_storage(migrated: Connection) -> None:
+    """Every field of the richest possible metadata survives a round trip."""
     metadata = rich_metadata()
-    schema.execute("INSERT INTO provider (id, label, adapter_type) VALUES ('scb', 'SCB', 'pxweb')")
-    schema.execute(
-        "INSERT INTO dataset (id, provider_id, native_table_id, operator_disabled) "
-        "VALUES ('scb-tab1', 'scb', 'TAB1', true)"
+    session = Session(bind=migrated)
+    session.execute(
+        text("INSERT INTO provider (id, label, adapter_type) VALUES ('scb', 'SCB', 'pxweb')")
+    )
+    session.execute(
+        text(
+            "INSERT INTO dataset (id, provider_id, native_table_id, operator_disabled) "
+            "VALUES ('scb-tab1', 'scb', 'TAB1', true)"
+        )
     )
     payload = metadata.model_dump(mode="json")
-    excluded = {"provider_id", "table_id", "native_table_id", "aliases", "dimensions"}
-    root = {key: value for key, value in payload.items() if key not in excluded}
-    insert(
-        schema,
-        "dataset_metadata",
-        {"dataset_id": metadata.table_id, **root},
-        {
-            "paths",
-            "links",
-            "link",
-            "roles",
-            "note_mandatory",
-            "px",
-            "contacts",
-            "comparison_marker",
-        },
+    root = {key: value for key, value in payload.items() if key not in IDENTITY_FIELDS}
+    session.execute(
+        DatasetMetadata.__table__.insert().values(dataset_id=metadata.table_id, **root)
     )
     for dimension in payload["dimensions"]:
         values = {key: value for key, value in dimension.items() if key != "categories"}
-        insert(
-            schema,
-            "dimension",
-            {
-                "dataset_id": metadata.table_id,
-                "language": metadata.language,
-                **values,
-            },
-            {"extension", "link"},
+        session.execute(
+            Dimension.__table__.insert().values(
+                dataset_id=metadata.table_id, language=metadata.language, **values
+            )
         )
         for category in dimension["categories"]:
-            insert(
-                schema,
-                "category",
-                {
-                    "dataset_id": metadata.table_id,
-                    "language": metadata.language,
-                    "dimension_code": dimension["code"],
+            session.execute(
+                Category.__table__.insert().values(
+                    dataset_id=metadata.table_id,
+                    language=metadata.language,
+                    dimension_code=dimension["code"],
                     **category,
-                },
-                {"unit"},
+                )
             )
-    restored = schema.execute("SELECT * FROM dataset_metadata").fetchone()
-    assert restored is not None
+
+    restored = session.execute(DatasetMetadata.__table__.select()).mappings().one()
     assert {key: restored[key] for key in root} == root
-    dimensions = []
-    for row in schema.execute("SELECT * FROM dimension ORDER BY index"):
-        row.pop("dataset_id")
-        row.pop("language")
-        categories = []
-        for category in schema.execute(
-            "SELECT * FROM category WHERE dimension_code = %s ORDER BY index", (row["code"],)
-        ):
-            for key in ("dataset_id", "language", "dimension_code"):
-                category.pop(key)
-            categories.append(category)
-        dimensions.append({**row, "categories": categories})
+    dimensions: list[dict[str, Any]] = []
+    stored_dimensions = session.execute(
+        Dimension.__table__.select().order_by(Dimension.index)
+    ).mappings()
+    for row in stored_dimensions:
+        values = {
+            key: value
+            for key, value in row.items()
+            if key not in {"dataset_id", "language"}
+        }
+        categories = session.execute(
+            Category.__table__.select()
+            .where(Category.dimension_code == row["code"])
+            .order_by(Category.index)
+        ).mappings()
+        values["categories"] = [
+            {
+                key: value
+                for key, value in category.items()
+                if key not in {"dataset_id", "language", "dimension_code"}
+            }
+            for category in categories
+        ]
+        dimensions.append(values)
     assert (
         NormalizedTableMetadata.model_validate(
-            {
-                **payload,
-                **{key: restored[key] for key in root},
-                "dimensions": dimensions,
-            }
+            {**payload, **{key: restored[key] for key in root}, "dimensions": dimensions}
         )
         == metadata
     )
-    assert schema.execute("SELECT retired, operator_disabled FROM dataset").fetchone() == {
-        "retired": False,
-        "operator_disabled": True,
-    }
+    assert session.execute(
+        text("SELECT retired, operator_disabled FROM dataset")
+    ).mappings().one() == {"retired": False, "operator_disabled": True}
 
 
-def test_definition_downgrade_and_reupgrade(schema: Connection[dict[str, Any]]) -> None:
-    schema.execute(read_migration("0001_initial.down.sql"))
-    assert not columns(schema, "dataset_metadata")
-    schema.execute(read_migration("0001_initial.up.sql"))
-    test_definitions_cover_the_models(schema)
+@pytest.mark.postgres
+def test_definition_downgrade_and_reupgrade(migrated: Connection) -> None:
+    config = _configuration(database_url())
+    config.attributes["connection"] = migrated
+    command.downgrade(config, "base")
+    assert not migrated.scalars(
+        text(
+            "SELECT tablename FROM pg_tables "
+            "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+        )
+    ).all()
+    command.upgrade(config, "head")
+    assert compare_metadata(MigrationContext.configure(migrated), Base.metadata) == []
