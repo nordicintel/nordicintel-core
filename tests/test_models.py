@@ -117,8 +117,14 @@ def test_unknown_extensions_and_order_survive() -> None:
     assert restored.dataset.to_mapping()["extension"]["vendor"] == {"nested": [1, False, "Örebro"]}
 
 
-def test_harvest_request_normalizes_languages() -> None:
-    assert HarvestRequest(languages=["SV", " en ", "sv"]).languages == ["en", "sv"]
+def test_a_harvest_request_names_exactly_one_language() -> None:
+    assert HarvestRequest(language=" SV ").language == "sv"
+    # A run is of one Provider in one language, so there is no set to normalize and no
+    # default to fall back to: omitting it is a rejected request, not an implied "all".
+    with pytest.raises(ValidationError):
+        HarvestRequest()
+    with pytest.raises(ValidationError, match="must not be blank"):
+        HarvestRequest(language="  ")
 
 
 def test_unicode_hash_is_deterministic() -> None:
@@ -130,4 +136,4 @@ def test_unicode_hash_is_deterministic() -> None:
 def test_discovery_rejects_duplicate_source_ids() -> None:
     entry = DiscoveryEntry(native_table_id="TAB1")
     with pytest.raises(ValidationError, match="must be unique"):
-        DiscoveryResult(scope={"languages": ["sv"]}, entries=[entry, entry], authoritative=True)
+        DiscoveryResult(scope={"language": "sv"}, entries=[entry, entry])

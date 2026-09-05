@@ -44,8 +44,16 @@ def test_definitions_cover_the_models() -> None:
         "harvest_job",
         "harvest_item",
     }
-    assert "retired" in columns("table_registry")
+    # Absence is not recorded anywhere: a Table that stops appearing upstream keeps its
+    # identity and its metadata untouched.
+    assert "retired" not in columns("table_registry")
+    assert "retired" not in columns("table_language_state")
+    # The publisher's own flag lives with the publisher's own metadata, never on identity.
     assert "discontinued" not in columns("table_registry")
+    assert "discontinued" in columns("table_metadata")
+    # A run is of one Provider in one language, and both halves are keys.
+    assert "language" in columns("harvest_job")
+    assert "language" in columns("harvest_schedule")
     assert columns("harvest_item") == {
         "id",
         "job_id",
@@ -145,7 +153,7 @@ def test_complete_metadata_storage(migrated: Connection) -> None:
         ProviderDefinition(id="scb", label="SCB", adapter_type="pxweb")
     )
     queue = HarvestRepository(session)
-    queue.enqueue("scb", HarvestRequest())
+    queue.enqueue("scb", HarvestRequest(language="sv"))
     job = queue.claim()
     assert job is not None
     metadata = rich_metadata()

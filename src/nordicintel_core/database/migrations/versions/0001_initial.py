@@ -1,4 +1,4 @@
-"""Initial schema: canonical Tables, JSON-stat metadata and harvest state.
+"""Initial schema: canonical Tables, JSON-stat metadata and language-scoped harvest state.
 
 Revision ID: 0001_initial
 """
@@ -66,6 +66,7 @@ def upgrade() -> None:
         "harvest_job",
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("provider_id", sa.Text(), nullable=False),
+        sa.Column("language", sa.Text(), nullable=False),
         sa.Column(
             "request", postgresql.JSONB(none_as_null=True, astext_type=sa.Text()), nullable=False
         ),
@@ -92,7 +93,8 @@ def upgrade() -> None:
             "error IS NULL OR jsonb_typeof(error) = 'object'", name=op.f("harvest_job_error_check")
         ),
         sa.CheckConstraint(
-            "jsonb_typeof(request) = 'object'", name=op.f("harvest_job_request_check")
+            "jsonb_typeof(request) = 'object' AND request->>'language' = language",
+            name=op.f("harvest_job_request_check"),
         ),
         sa.CheckConstraint(
             "status <> 'failed' OR error IS NOT NULL", name=op.f("harvest_job_failure_error_check")
@@ -113,6 +115,10 @@ def upgrade() -> None:
             "trigger IN ('manual', 'schedule')", name=op.f("harvest_job_trigger_check")
         ),
         sa.CheckConstraint(
+            "length(language) > 0 AND language = lower(btrim(language))",
+            name=op.f("harvest_job_language_check"),
+        ),
+        sa.CheckConstraint(
             "request_key IS NULL OR length(request_key) BETWEEN 1 AND 200",
             name=op.f("harvest_job_request_key_check"),
         ),
@@ -121,6 +127,13 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("harvest_job_pkey")),
         sa.UniqueConstraint("request_key", name=op.f("harvest_job_request_key_key")),
+    )
+    op.create_index(
+        "harvest_job_active_language_idx",
+        "harvest_job",
+        ["provider_id", "language"],
+        unique=False,
+        postgresql_where=sa.text("status IN ('queued', 'running')"),
     )
     op.create_index(
         "harvest_job_one_running_provider_idx",
@@ -152,26 +165,26 @@ def upgrade() -> None:
     op.create_table(
         "harvest_schedule",
         sa.Column("provider_id", sa.Text(), nullable=False),
+        sa.Column("language", sa.Text(), nullable=False),
         sa.Column("enabled", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         sa.Column("every_seconds", sa.Integer(), nullable=False),
         sa.Column("next_run_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
-            "request",
-            postgresql.JSONB(none_as_null=True, astext_type=sa.Text()),
-            server_default=sa.text(
-                "jsonb_build_object('table_id', NULL, 'force', false, 'languages', NULL)"
-            ),
-            nullable=False,
+            "request", postgresql.JSONB(none_as_null=True, astext_type=sa.Text()), nullable=False
         ),
         sa.CheckConstraint(
-            "jsonb_typeof(request) = 'object' AND request->'table_id' = 'null'::jsonb",
+            "jsonb_typeof(request) = 'object' AND request->'table_id' = 'null'::jsonb AND request->>'language' = language",
             name=op.f("harvest_schedule_request_check"),
         ),
         sa.CheckConstraint("every_seconds > 0", name=op.f("harvest_schedule_every_seconds_check")),
+        sa.CheckConstraint(
+            "length(language) > 0 AND language = lower(btrim(language))",
+            name=op.f("harvest_schedule_language_check"),
+        ),
         sa.ForeignKeyConstraint(
             ["provider_id"], ["provider.id"], name=op.f("harvest_schedule_provider_id_fkey")
         ),
-        sa.PrimaryKeyConstraint("provider_id", name=op.f("harvest_schedule_pkey")),
+        sa.PrimaryKeyConstraint("provider_id", "language", name=op.f("harvest_schedule_pkey")),
     )
     op.create_index(
         "harvest_schedule_due_idx",
@@ -186,7 +199,6 @@ def upgrade() -> None:
         sa.Column("provider_id", sa.Text(), nullable=False),
         sa.Column("native_table_id", sa.Text(), nullable=False),
         sa.Column("serving_mode", sa.Text(), server_default=sa.text("'routed'"), nullable=False),
-        sa.Column("retired", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column(
             "operator_disabled", sa.Boolean(), server_default=sa.text("false"), nullable=False
         ),
@@ -276,13 +288,13 @@ def upgrade() -> None:
             "length(native_table_id) > 0", name=op.f("harvest_item_native_table_id_check")
         ),
         sa.ForeignKeyConstraint(
-            ["table_id"], ["table_registry.id"], name=op.f("harvest_item_table_id_fkey")
-        ),
-        sa.ForeignKeyConstraint(
             ["job_id"],
             ["harvest_job.id"],
             name=op.f("harvest_item_job_id_fkey"),
             ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["table_id"], ["table_registry.id"], name=op.f("harvest_item_table_id_fkey")
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("harvest_item_pkey")),
         sa.UniqueConstraint(
@@ -290,13 +302,13 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
+        "harvest_item_job_idx", "harvest_item", ["job_id", "status", "id"], unique=False
+    )
+    op.create_index(
         "harvest_item_table_idx",
         "harvest_item",
         ["table_id", sa.literal_column("started_at DESC")],
         unique=False,
-    )
-    op.create_index(
-        "harvest_item_job_idx", "harvest_item", ["job_id", "status", "id"], unique=False
     )
     op.create_table(
         "table_language_state",
@@ -419,8 +431,8 @@ def downgrade() -> None:
     op.drop_index("table_metadata_search_idx", table_name="table_metadata", postgresql_using="gin")
     op.drop_table("table_metadata")
     op.drop_table("table_language_state")
-    op.drop_index("harvest_item_job_idx", table_name="harvest_item")
     op.drop_index("harvest_item_table_idx", table_name="harvest_item")
+    op.drop_index("harvest_item_job_idx", table_name="harvest_item")
     op.drop_table("harvest_item")
     op.drop_index("dataset_provider_idx", table_name="table_registry")
     op.drop_table("table_registry")
@@ -445,6 +457,11 @@ def downgrade() -> None:
         "harvest_job_one_running_provider_idx",
         table_name="harvest_job",
         postgresql_where=sa.text("status = 'running'"),
+    )
+    op.drop_index(
+        "harvest_job_active_language_idx",
+        table_name="harvest_job",
+        postgresql_where=sa.text("status IN ('queued', 'running')"),
     )
     op.drop_table("harvest_job")
     op.drop_table("provider")
