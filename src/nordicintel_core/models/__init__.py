@@ -1,6 +1,6 @@
 """Public model and protocol contracts."""
 
-from nordicintel_model.jsonstat import JsonStatDataset
+from nordicintel_core.jsonstat import JsonStatDataset
 
 from .adapters import AdapterFactory, AsyncHttpClient, NordicIntelAdapter
 from .data import DimensionSelection, ExplicitSelection

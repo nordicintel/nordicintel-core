@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from nordicintel_model.jsonstat import JsonStatDataset
+from nordicintel_core.jsonstat import JsonStatDataset
 
 from .data import ExplicitSelection
 from .harvest import DiscoveryEntry, DiscoveryResult, DiscoveryScope, LanguageState

@@ -1,11 +1,10 @@
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from nordicintel_model.jsonstat import DenseValues, JsonStatDataset, SparseStatus, dumps, loads
 from pydantic import ValidationError
 
+from nordicintel_core.jsonstat import JsonStatDataset, dumps, loads
 from nordicintel_core.models import (
     DiscoveryEntry,
     DiscoveryResult,
@@ -43,14 +42,14 @@ def test_jsonstat_composition_round_trip() -> None:
 
 def test_same_dataset_type_serves_live_data() -> None:
     dataset = rich_metadata().metadata.dataset
-    live = replace(
-        dataset, values=DenseValues.create([1.5, None]), status=SparseStatus({"1": ".."})
+    live = JsonStatDataset.from_mapping(
+        {**dataset.to_mapping(), "value": [1.5, None], "status": {"1": ".."}}
     )
     assert type(live) is type(dataset)
     assert parse_dataset(live).to_mapping()["value"] == [1.5, None]
     assert loads(dumps(live)).to_mapping()["status"] == {"1": ".."}
     with pytest.raises(ValueError):
-        parse_dataset(replace(dataset, values=DenseValues.create([1.5])))
+        parse_dataset({**dataset.to_mapping(), "value": [1.5]})
 
 
 @pytest.mark.parametrize(
@@ -114,7 +113,7 @@ def test_unknown_extensions_and_order_survive() -> None:
     category = payload["dataset"]["dimension"]["region"]["category"]
     category["index"] = {"18": 1, "SE": 0}
     restored = LanguageMetadata.model_validate(payload)
-    assert restored.dataset.dimensions[0].category.codes == ("SE", "18")
+    assert restored.dataset.dimension["region"].category.codes == ("SE", "18")
     assert restored.dataset.to_mapping()["extension"]["vendor"] == {"nested": [1, False, "Örebro"]}
 
 

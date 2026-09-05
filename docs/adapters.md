@@ -11,7 +11,7 @@ Adapters never receive a database connection.
 opaque `comparison_marker`. Core mints/resolves the canonical Table ID during acceptance.
 
 `LanguageMetadata` has `language`, `catalog: TableCatalogMetadata`, and
-`dataset: nordicintel_model.jsonstat.JsonStatDataset`. Construct it from typed objects
+`dataset: nordicintel_core.jsonstat.JsonStatDataset`. Construct it from typed objects
 or a JSON-stat mapping. The Dataset preserves the JSON-stat/PxWeb wire structure,
 including relation-keyed links, roles, category order, units, notes, and extensions.
 Metadata acceptance requires an empty dense `value` array and no observation status.
@@ -36,10 +36,11 @@ routing identity from `MetadataRepository.get_table(table_id)`. Selection expans
 and preflight happen before dispatch. Preserve the live Dataset's observation order;
 never attach selected values positionally to the full harvested structure.
 
-Use `nordicintel_model.dumps` to serialize Dataset responses, preserving numeric values.
-PxWeb extension interpretation and selection-aware enrichment live in model's `pxweb`
-package. Enrichment filters category-keyed extension maps and preserves note/flag
-association. Retaining codelist or elimination metadata does not implement aggregation.
+Use `nordicintel_core.jsonstat.dumps` to serialize Dataset responses, preserving numeric values.
+The complete Dataset and typed PxWeb extensions live in `nordicintel_core.jsonstat`.
+See [the Dataset model](jsonstat.md) for construction, validation and serialization.
+Adapters that enrich selections must filter category-keyed extension maps and preserve
+note/flag association. Retaining codelist or elimination metadata does not implement aggregation.
 
 ## Discovery and HTTP
 

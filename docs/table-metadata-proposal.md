@@ -27,16 +27,16 @@ LanguageState
 
 ## One statistical Dataset
 
-`nordicintel-model` owns the JSON-stat 2.0 Dataset and codec. Core composes that exact
+`nordicintel_core.jsonstat` owns the JSON-stat 2.0 Dataset and codec. Core composes that exact
 type with catalog metadata; there is no second flattened Dataset implementation.
 Metadata output uses a full-domain Dataset with `value: []`. Live data uses the same
 type with selected dimensions/categories, observations, and optional status.
 
 Dimensions, category indexes, roles, units, notes, links, and extensions retain their
-JSON-stat locations. PxWeb wrappers interpret known extension fields. Generic JSON-stat
-validation does not assign PxWeb meaning to otherwise open extensions.
+JSON-stat locations. All published PxWeb extension fields have explicit types; unknown
+extension properties are retained. Metadata acceptance additionally checks PxWeb references.
 
-JSON-stat shape is validated against the bundled supplied schema, followed by semantic
+JSON-stat shape is validated against the bundled public schema, together with semantic
 checks for sizes, category order/references, roles, and observation indexing. Core also
 validates known PxWeb category references, note indices, placement, and measurement enums.
 The metadata boundary requires an empty dense value array and absent observation status.
@@ -81,8 +81,8 @@ model directly. Neither observations nor historical metadata versions are persis
 
 ## Package boundaries
 
-`nordicintel-model`: JSON-stat Dataset/value types, codec, generic validation, PxWeb DTOs,
-extension interpretation, selection-aware enrichment, and CSV support.
+`nordicintel_core.jsonstat`: Dataset/value types, codec, bundled schema, generic
+validation, and PxWeb extension validation.
 
 `nordicintel-core.models`: Table identity, catalog/language envelopes, provider and adapter
 contracts, explicit selections, and harvest lifecycle/state.
@@ -91,20 +91,20 @@ contracts, explicit selections, and harvest lifecycle/state.
 `nordicintel-core.http`: injected HTTP transport and retry/rate-limit utilities.
 
 API and harvest services consume core. Provider-family adapters return shared Datasets.
-Core now requires Python 3.12+ and declares a model-package dependency. Local uv development
-uses a sibling `nordicintel-model` checkout; release wheels use a normal version requirement.
+Core requires Python 3.12+. It builds and tests from this repository alone.
 
 ## Response discipline
 
 Use the Dataset codec for `/metadata` and `/data` serialization. A selected response's
 structure describes its actual cells. Stored metadata can enrich compatible descriptions;
-it cannot replace the live response's indexing. Enrichment filters category-specific
-extension maps and handles note flags alongside the corresponding notes.
+it cannot replace the live response's indexing. Adapters must filter category-specific extension maps and keep note flags aligned
+with the corresponding notes when enriching selected responses.
 
 Codelist references, PX presentation hints, and elimination metadata are preserved.
 Their presence does not add codelist/default-selection/saved-query services or implicit
 aggregation execution.
 
 See [adapter integration](adapters.md) and [database integration](database.md) for the
-implemented contracts. The schemas and supplied PxTools documentation in the model
-repository remain the protocol references.
+implemented contracts. The bundled JSON-stat schema and supplied PxTools documentation remain protocol references.
+
+See [the complete Dataset model](jsonstat.md) for all types and specification coverage.

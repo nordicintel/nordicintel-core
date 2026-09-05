@@ -255,9 +255,9 @@ class MetadataRepository:
             metadata.dataset.source,
             *(metadata.catalog.tags or []),
         ]
-        for dimension in metadata.dataset.dimensions:
+        for dimension in metadata.dataset.dimension.values():
             terms.append(dimension.label)
-            terms.extend(dimension.category.labels.values())
+            terms.extend((dimension.category.label or {}).values())
         search_text = " ".join(term for term in terms if term)
         with self.session.begin():
             self._assert_owner(job_id, result.provider_id)

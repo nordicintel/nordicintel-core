@@ -126,7 +126,7 @@ def test_metadata_round_trip_search_and_operator_ownership() -> None:
         restored = repository.get_language("scb-tab1", "SV")
         assert restored is not None
         assert restored.catalog.label == "Folkmängd"
-        assert list(restored.dataset.dimensions[0].category.codes) == ["01", "02"]
+        assert list(restored.dataset.dimension["region"].category.codes) == ["01", "02"]
         assert restored.dataset.role.to_mapping() == {"geo": ["region"], "time": ["year"]}
         assert repository.resolve_id("scb-tab1") == "scb-tab1"
         assert repository.resolve_id("scb-old-tab1") is None
@@ -470,13 +470,14 @@ def test_numeric_metadata_round_trip_and_sql_observation_guard() -> None:
         result = MetadataFetchResult.model_validate(payload)
         repository.upsert_language(job_id, result)
         restored = repository.get_language("scb-tab1", "sv")
-        assert restored.dataset.dimensions[0].category.coordinates["01"][0] == Decimal(
+        assert restored.dataset.dimension["region"].category.coordinates["01"][0] == Decimal(
             "18.1234567890123456789"
         )
         with pytest.raises(IntegrityError), session.begin():
             session.execute(
                 text(
-                    "UPDATE table_metadata SET dataset = jsonb_set(dataset, '{value}', '[1,2]'::jsonb)"
+                    "UPDATE table_metadata SET dataset = "
+                    "jsonb_set(dataset, '{value}', '[1,2]'::jsonb)"
                 )
             )
         assert repository.get_language("scb-tab1", "sv").dataset.to_mapping()["value"] == []

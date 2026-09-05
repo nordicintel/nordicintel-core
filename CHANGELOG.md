@@ -2,6 +2,12 @@
 
 ## Unreleased — breaking metadata/schema rewrite
 
+- Implement the complete JSON-stat Dataset from scratch in `nordicintel_core.jsonstat`,
+  with Pydantic types for every Dataset field and all published PxWeb extensions.
+  Validate against the public specification and cube/reference consistency rules.
+  Remove the external model dependency and sibling repository CI checkout.
+  Metadata and live data use the same core-owned Dataset type.
+
 - Define the schema as a SQLAlchemy declarative model (`database/schema.py`) and generate
   the Alembic revision from it. Remove the packaged `.sql` migration and query resources,
   `sql_files`, and `connect`; repositories now take a `Session`. `migrate check` compares

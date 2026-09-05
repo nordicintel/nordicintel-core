@@ -7,20 +7,19 @@ import json
 import re
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import simplejson
-from nordicintel_model.jsonstat import DenseValues, JsonStatDataset, validate_jsonstat
-from nordicintel_model.pxweb.validation import validate_pxweb_dataset
 from pydantic import (
     Field,
     PlainSerializer,
-    PlainValidator,
     SerializationInfo,
-    WithJsonSchema,
     field_validator,
     model_validator,
 )
+
+from nordicintel_core.jsonstat import JsonStatDataset
+from nordicintel_core.jsonstat.pxweb import validate_pxweb_dataset
 
 from ._base import CoreModel
 from .statistical import Link, PathElement, TableCategory, TimeUnit
@@ -32,9 +31,10 @@ def parse_dataset(value: Any) -> JsonStatDataset:
     """Validate the shared Dataset at the application boundary."""
     if not isinstance(value, (JsonStatDataset, Mapping)):
         raise ValueError("dataset must be a JSON-stat object")
-    dataset = value if isinstance(value, JsonStatDataset) else JsonStatDataset.from_mapping(value)
-    validate_jsonstat(dataset).raise_for_errors()
-    validate_pxweb_dataset(dataset).raise_for_errors()
+    dataset = JsonStatDataset.from_mapping(
+        value.to_mapping() if isinstance(value, JsonStatDataset) else value
+    )
+    validate_pxweb_dataset(dataset)
     return dataset
 
 
@@ -42,16 +42,14 @@ def _serialize_dataset(value: JsonStatDataset, info: SerializationInfo) -> dict[
     mapping = value.to_mapping()
     if info.mode == "json":
         # Pydantic encodes untyped Decimal values as strings. Dataset numbers must remain numbers.
-        # Public Dataset responses use nordicintel_model.dumps directly for exact decimal encoding.
-        return json.loads(simplejson.dumps(mapping, use_decimal=True))
+        # Dataset responses use the JSON-stat codec directly for exact decimal encoding.
+        return cast(dict[str, Any], json.loads(simplejson.dumps(mapping, use_decimal=True)))
     return mapping
 
 
 DatasetValue = Annotated[
     JsonStatDataset,
-    PlainValidator(parse_dataset),
     PlainSerializer(_serialize_dataset, return_type=dict, when_used="always"),
-    WithJsonSchema({"type": "object", "description": "JSON-stat 2.0 Dataset"}),
 ]
 
 
@@ -101,7 +99,8 @@ class LanguageMetadata(CoreModel):
 
     @model_validator(mode="after")
     def metadata_only(self) -> LanguageMetadata:
-        if not isinstance(self.dataset.values, DenseValues) or self.dataset.values.items:
+        validate_pxweb_dataset(self.dataset)
+        if not isinstance(self.dataset.value, list) or self.dataset.value:
             raise ValueError("harvested metadata requires value: []")
         if self.dataset.status is not None:
             raise ValueError("harvested metadata cannot contain observation status")

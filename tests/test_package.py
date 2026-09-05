@@ -45,3 +45,25 @@ def test_import_does_not_read_database_environment() -> None:
     finally:
         if previous is not None:
             os.environ["NORDICINTEL_DATABASE_URL"] = previous
+
+
+def test_dataset_contract_is_self_contained() -> None:
+    program = """
+import sys
+sys.modules["nordicintel_model"] = None
+from importlib.resources import files
+from nordicintel_core.jsonstat import loads, dumps
+from nordicintel_core.models import JsonStatDataset
+assert files('nordicintel_core.jsonstat').joinpath('dataset.schema.json').is_file()
+payload = (
+    '{"version":"2.0","class":"dataset","id":["x"],"size":[1],'
+    '"dimension":{"x":{"category":{"index":["a"]}}},"value":[]}'
+)
+dataset = loads(payload)
+assert isinstance(dataset, JsonStatDataset)
+assert loads(dumps(dataset)) == dataset
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", program], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
