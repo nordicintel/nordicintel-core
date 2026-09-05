@@ -69,6 +69,22 @@ The separate `validate_pxweb_dataset` function in `jsonstat.pxweb` checks catego
 note and heading/stub references in typed PxWeb extensions. `LanguageMetadata`
 applies these checks and requires `value: []` with no observation status.
 
+### One deliberate departure from the published schema
+
+Notes may repeat. The published schema types every string array, notes included, as
+`uniqueItems`, but a PxWeb note is not a bare string: it is text plus a mandatory flag,
+carried on the wire as a positional `note` array alongside `extension.noteMandatory` and
+`categoryNoteMandatory`, which address notes by index. Two notes may therefore share their
+text and differ in whether they are mandatory, and PxApi v2's own schema types `note` as a
+plain string array with no uniqueness rule. Deduplicating such an array would not remove a
+repetition — it would delete a note and shift the flags of every note after it.
+
+`dataset.schema.json` is kept as a verbatim copy of the published schema, so it can be
+diffed against json-stat.org; the adjustment is applied in `validation.py`, where it
+carries its reason. It is scoped to notes alone: `id`, `role`, `category.index` and
+`category.child` remain unique, because a repeat in any of those is a structurally broken
+document rather than a repeated sentence.
+
 Nested containers are mutable. The Dataset codec and metadata acceptance boundary
 revalidate them, so an in-place edit cannot bypass validation when serving or
 persisting a Dataset. Construct a replacement through `from_mapping()` when changing

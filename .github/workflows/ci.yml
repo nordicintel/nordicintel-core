@@ -46,6 +46,9 @@ jobs:
           python-version: "3.12"
       - run: uv sync --all-extras --dev --locked
       - run: uv run python -m nordicintel_core.database migrate upgrade
+      # Drift, not just the revision string: `check` compares the database against
+      # Base.metadata, so a schema edit an unwritten revision has not followed fails here.
+      - run: uv run python -m nordicintel_core.database migrate check
       - run: uv run pytest -m postgres
       - run: uv run python -m nordicintel_core.database migrate downgrade
       - run: uv run python -m nordicintel_core.database migrate upgrade

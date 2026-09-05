@@ -180,7 +180,6 @@ def test_constant_dimension_can_omit_index() -> None:
         {"href": "not a URI"},
         {"label": None},
         {"unexpected": 1},
-        {"note": ["same", "same"]},
     ],
 )
 def test_invalid_documents_are_rejected(cube: dict, change: dict) -> None:
@@ -281,5 +280,48 @@ def test_embedded_link_cube_is_checked(cube: dict) -> None:
     del embedded["version"]
     embedded["size"] = [5, 2]
     cube["link"] = {"item": [embedded]}
+    with pytest.raises(ValueError):
+        JsonStatDataset.from_mapping(cube)
+
+
+def test_repeated_note_text_is_kept_because_a_pxweb_note_is_more_than_its_text(
+    cube: dict,
+) -> None:
+    """A PxWeb note is text plus a mandatory flag, so two notes may share their text.
+
+    On the wire that pair is split across a positional ``note`` array and
+    ``extension.noteMandatory``, which addresses notes by index. Rejecting the repetition
+    loses real tables; collapsing it would delete a note and shift every flag after it.
+    Both are wrong, so the repetition is carried through untouched.
+    """
+    cube["dimension"]["region"]["note"] = ["Same wording.", "Same wording."]
+    cube["dimension"]["region"]["extension"] = {
+        "noteMandatory": {"0": True, "1": False},
+    }
+    dataset = JsonStatDataset.from_mapping(cube)
+    assert dataset.dimension["region"].note == ["Same wording.", "Same wording."]
+    assert dataset.dimension["region"].extension is not None
+    assert dataset.dimension["region"].extension.note_mandatory == {"0": True, "1": False}
+    assert loads(dumps(dataset)).to_mapping() == cube
+
+
+def test_a_mandatory_flag_may_not_address_a_note_that_is_not_there(cube: dict) -> None:
+    """Notes may repeat, but the flags still have to line up with them."""
+    cube["dimension"]["region"]["note"] = ["Only one."]
+    cube["dimension"]["region"]["extension"] = {"noteMandatory": {"0": True, "1": True}}
+    with pytest.raises(ValueError):
+        validate_pxweb_dataset(JsonStatDataset.from_mapping(cube))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"id": ["region", "region"]},
+        {"role": {"geo": ["region", "region"]}},
+    ],
+)
+def test_structural_arrays_are_still_unique(cube: dict, change: dict) -> None:
+    """Only notes are exempt. A repeat anywhere else is a broken document."""
+    cube.update(change)
     with pytest.raises(ValueError):
         JsonStatDataset.from_mapping(cube)

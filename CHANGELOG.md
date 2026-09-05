@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased — breaking metadata/schema rewrite
+## 0.2.0 — 2026-09-05 — breaking metadata/schema rewrite
+
+- Stop rejecting repeated note strings. The published JSON-stat schema types every string
+  array as `uniqueItems`, but a PxWeb note is text *plus* a mandatory flag, carried on the
+  wire as a positional `note` array alongside `extension.noteMandatory`, which addresses
+  notes by index. Two notes may share their text and differ in whether they are mandatory,
+  and PxApi v2's own schema types `note` as a plain string array with no uniqueness rule.
+  This rejected 12% of Statistics Sweden's catalogue outright, and deduplicating would
+  have been worse: it deletes a note and shifts the flags of every note after it.
+  `dataset.schema.json` stays a verbatim copy of the published schema so it can be diffed
+  against json-stat.org; the adjustment is applied in `validation.py` where it carries its
+  reason. `id`, `role`, `category.index` and `category.child` are still unique — a repeat
+  in any of those is a structurally broken document.
 
 - **A harvest run is one Provider in one language.** `HarvestRequest.language` and
   `DiscoveryScope.language` are required scalars, replacing the optional language *set*.
