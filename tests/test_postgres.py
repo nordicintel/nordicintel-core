@@ -23,9 +23,12 @@ from nordicintel_core.database import (
 from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
     Diagnostic,
+    DiagnosticStage,
+    DiscoveryEntry,
     DiscoveryResult,
     DiscoveryScope,
     HarvestRequest,
+    InventoryReconciliation,
     ItemStatus,
     JobStatus,
     MetadataFetchResult,
@@ -241,9 +244,60 @@ def test_retirement_requires_authoritative_provider_wide_discovery() -> None:
             scope=DiscoveryScope(languages=["sv"]), entries=[], authoritative=False
         )
         with pytest.raises(ValueError, match="authoritative"):
-            repository.retire_unseen(job_id, "scb", incomplete)
+            repository.reconcile_inventory(job_id, "scb", incomplete)
+        single_table = DiscoveryResult(
+            scope=DiscoveryScope(table_id="scb-tab1", native_table_id="TAB1", languages=["sv"]),
+            entries=[DiscoveryEntry(native_table_id="TAB1")],
+            authoritative=True,
+        )
+        with pytest.raises(ValueError, match="authoritative"):
+            repository.reconcile_inventory(job_id, "scb", single_table)
         authoritative = incomplete.model_copy(update={"authoritative": True})
-        assert repository.retire_unseen(job_id, "scb", authoritative) == ["scb-tab1"]
+        assert repository.reconcile_inventory(job_id, "scb", authoritative) == (
+            InventoryReconciliation(restored=[], retired=["scb-tab1"])
+        )
+
+
+def test_reappearance_restores_a_retired_table_without_new_metadata() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(job_id, metadata())
+        empty = DiscoveryResult(
+            scope=DiscoveryScope(languages=["sv"]), entries=[], authoritative=True
+        )
+        assert repository.reconcile_inventory(job_id, "scb", empty).retired == ["scb-tab1"]
+        present = empty.model_copy(update={"entries": [DiscoveryEntry(native_table_id="TAB1")]})
+        # The Table is unchanged upstream, so this run accepts no metadata at all.
+        reconciled = repository.reconcile_inventory(job_id, "scb", present)
+        assert reconciled == InventoryReconciliation(restored=["scb-tab1"], retired=[])
+        table = repository.get_table("scb-tab1")
+        assert table is not None and table.retired is False
+        # Reconciling the same inventory twice reports no further change.
+        assert repository.reconcile_inventory(job_id, "scb", present) == InventoryReconciliation()
+
+
+def test_native_lookup_resolves_the_identity_a_slug_cannot() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(job_id, metadata())
+        with session.begin():
+            session.execute(
+                text(
+                    "INSERT INTO table_registry (id, provider_id, native_table_id) "
+                    "VALUES ('scb-tab2', 'scb', 'tab/2')"
+                )
+            )
+        found = repository.get_table_by_native("scb", "TAB1")
+        assert found is not None and found.table_id == "scb-tab1"
+        # 'tab/2' does not slugify back to its stored identity, and neither does a miss.
+        colliding = repository.get_table_by_native("scb", "tab/2")
+        assert colliding is not None and colliding.native_table_id == "tab/2"
+        assert repository.get_table_by_native("scb", "MISSING") is None
+        assert repository.get_table_by_native("ssb", "TAB1") is None
 
 
 def test_queue_serializes_provider_but_skips_to_free_provider() -> None:
@@ -288,6 +342,60 @@ def test_item_lifecycle_idempotency_and_cancellation() -> None:
         assert queue.cancel(claimed.id).cancel_requested is True
         finished = queue.finish_job(claimed.id, JobStatus.CANCELLED)
         assert finished.status is JobStatus.CANCELLED
+        queue.release_provider("scb")
+
+
+def test_cancellation_outranks_completion_and_closes_the_running_item() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        queue = HarvestRepository(session)
+        job_id = start_job(session)
+        item = queue.begin_item(job_id, "TAB1")
+        # The request lands while the worker is mid-table, so it reports its own intent.
+        queue.cancel(job_id)
+        finished = queue.finish_job(job_id, JobStatus.COMPLETED)
+        assert finished.status is JobStatus.CANCELLED
+        assert finished.error is None
+        stopped = queue.list_items(job_id)
+        assert [row.id for row in stopped] == [item.id]
+        assert stopped[0].status is ItemStatus.FAILED
+        assert stopped[0].error is not None
+        assert stopped[0].error.stage is DiagnosticStage.INTERRUPTED
+        queue.release_provider("scb")
+
+
+def test_finalization_keeps_a_failure_and_rejects_completion_with_open_items() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        queue = HarvestRepository(session)
+        job_id = start_job(session)
+        queue.begin_item(job_id, "TAB1")
+        with pytest.raises(ValueError, match="unfinished items"):
+            queue.finish_job(job_id, JobStatus.COMPLETED)
+        queue.cancel(job_id)
+        failure = Diagnostic(code="discovery_failed", message="Inventory was incomplete.")
+        # A cancellation request must not discard the only account of what went wrong.
+        finished = queue.finish_job(job_id, JobStatus.FAILED, error=failure)
+        assert finished.status is JobStatus.FAILED
+        assert finished.error == failure
+        assert queue.list_items(job_id)[0].error == failure
+        queue.release_provider("scb")
+
+
+def test_disabling_a_provider_can_cascade_to_its_unfinished_jobs() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        queue = HarvestRepository(session)
+        running = start_job(session)
+        queued = queue.enqueue("scb", HarvestRequest(force=True))
+        ProviderRepository(session).set_enabled("scb", False)
+        cascaded = {job.id: job for job in queue.cancel_provider_jobs("scb")}
+        assert cascaded[queued.id].status is JobStatus.CANCELLED
+        # A running job is only asked to stop; its worker still finalizes it.
+        assert cascaded[running].status is JobStatus.RUNNING
+        assert cascaded[running].cancel_requested is True
+        assert queue.finish_job(running, JobStatus.COMPLETED).status is JobStatus.CANCELLED
+        assert queue.cancel_provider_jobs("scb") == []
         queue.release_provider("scb")
 
 

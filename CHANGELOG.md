@@ -2,6 +2,27 @@
 
 ## Unreleased — breaking metadata/schema rewrite
 
+- Add `MetadataRepository.get_table_by_native()`. Discovery yields upstream identifiers,
+  and `canonical_slug` is a minting rule rather than a lookup: a collision appends a
+  suffix, so a rebuilt slug can address a different Table or none.
+- Replace `MetadataRepository.retire_unseen()` with `reconcile_inventory()`, which
+  decides `retired` in both directions from one authoritative provider-wide discovery and
+  reports the Tables it changed. Acceptance could not clear retirement, because an
+  unchanged Table is skipped rather than accepted, so a Table that reappeared stayed
+  retired until its content next changed. Publisher `discontinued` and operator controls
+  are still never inferred from presence.
+- Make `finish_job()` decide the terminal status under the job row lock instead of
+  requiring the caller to have predicted it. A cancellation observed at that instant
+  outranks normal completion, a genuine failure keeps its status and diagnostic, and
+  items still running are closed as failed with the reason the job ended. Reporting
+  completion with items still running remains a caller defect.
+- Add `HarvestRepository.cancel_provider_jobs()` so disabling a Provider can also empty
+  its queue and ask its running job to stop. `set_enabled(False)` still changes only the
+  Provider row; running jobs stop cooperatively either way.
+- Add optional `DiscoveryScope.native_table_id`, set alongside the canonical `table_id`
+  when a job is narrowed to one Table, so an adapter can address it directly instead of
+  enumerating a catalogue to filter it.
+
 - Implement the complete JSON-stat Dataset from scratch in `nordicintel_core.jsonstat`,
   with Pydantic types for every Dataset field and all published PxWeb extensions.
   Validate against the public specification and cube/reference consistency rules.

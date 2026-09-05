@@ -34,6 +34,18 @@ native routing identity/controls, `get_language` supplies `TableLanguageMetadata
 `upsert_language` accepts `MetadataFetchResult`. JSON serialization at the database
 boundary preserves Decimal metadata as JSON numbers.
 
+Discovery returns upstream identifiers, so `get_table_by_native(provider_id,
+native_table_id)` is the lookup a worker uses before it has a canonical identity.
+`canonical_slug` mints a name and is not a lookup: a collision appends a suffix, so a
+rebuilt slug can address a different Table or none.
+
+`reconcile_inventory` decides `retired` in both directions from one authoritative
+provider-wide discovery, and returns the Tables whose absence flag changed. Presence has
+to decide it alone: an unchanged Table is skipped rather than accepted, so acceptance
+would leave a Table that reappeared retired until its content next changed. Only
+`retired` is written; the publisher's `discontinued` and the operator's controls describe
+different decisions and are never inferred from presence.
+
 The initial migration is rebuilt for this predeployment model. It is a clean initial
 schema, with no compatibility migration from the discarded design.
 

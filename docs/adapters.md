@@ -49,6 +49,13 @@ and marker semantics. A publication timestamp is a safe skip marker only if the 
 knows it covers relevant metadata changes.
 
 `DiscoveryResult.authoritative` can be true only after the complete provider scope was
-enumerated. Incomplete/single-table discovery must not retire unseen tables.
+enumerated. Incomplete/single-table discovery must not retire unseen tables, and
+`reconcile_inventory` refuses a scope that names a Table for exactly that reason.
+
+`DiscoveryScope.table_id` is canonical and an adapter cannot resolve it. When a job is
+narrowed to one Table the worker resolves it first and also supplies
+`DiscoveryScope.native_table_id`, so an adapter can address the Table directly rather
+than enumerating a whole catalogue to filter it. Both fields are absent for a
+provider-wide traversal. Never parse a canonical slug back into an upstream identifier.
 
 Retries are opt-in through `retry_safe=True` for operations known to be safe to repeat.

@@ -65,7 +65,17 @@ class HarvestRequest(CoreModel):
 
 
 class DiscoveryScope(CoreModel):
+    """The scope one discovery call must enumerate.
+
+    ``table_id`` is canonical and belongs to core; an Adapter cannot resolve it. When a
+    worker narrows a job to one Table it resolves that identity first and passes the
+    upstream identity in ``native_table_id`` as well, so an Adapter can address the
+    Table directly instead of enumerating an entire catalogue. Both are absent for a
+    provider-wide traversal, which is the only scope allowed to decide absence.
+    """
+
     table_id: str | None = None
+    native_table_id: str | None = None
     languages: list[str]
 
     @field_validator("table_id")
@@ -74,6 +84,19 @@ class DiscoveryScope(CoreModel):
         if value is not None and not CANONICAL_ID_PATTERN.fullmatch(value):
             raise ValueError("table_id must be a canonical table slug")
         return value
+
+    @field_validator("native_table_id")
+    @classmethod
+    def validate_native_table_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("native_table_id must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_single_table_scope(self) -> DiscoveryScope:
+        if self.native_table_id is not None and self.table_id is None:
+            raise ValueError("native_table_id requires the canonical table_id it resolves to")
+        return self
 
     @field_validator("languages")
     @classmethod
@@ -112,6 +135,18 @@ class DiscoveryResult(CoreModel):
         if len(ids) != len(set(ids)):
             raise ValueError("discovery native_table_id values must be unique")
         return self
+
+
+class InventoryReconciliation(CoreModel):
+    """The identity changes an authoritative discovery justified.
+
+    ``restored`` and ``retired`` name canonical Tables whose absence flag changed. Both
+    are consequences of presence in the inventory alone, so they are decided even for
+    Tables whose metadata was skipped as unchanged during the same Harvest Job.
+    """
+
+    restored: list[str] = Field(default_factory=list)
+    retired: list[str] = Field(default_factory=list)
 
 
 class LanguageState(CoreModel):

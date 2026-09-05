@@ -42,6 +42,15 @@ _SCHEDULER_LOCK_KEY = "nordicintel:scheduler"
 
 _ACTIVE_STATUSES = (JobStatus.QUEUED.value, JobStatus.RUNNING.value)
 
+# The reason an item stops when its job is cancelled. Item statuses have no cancelled
+# member, and a failed item must carry a diagnostic, so the stage is what distinguishes
+# "the run was stopped" from "this Table could not be harvested".
+_INTERRUPTED = Diagnostic(
+    code="job_cancelled",
+    message="The job was cancelled before this table finished.",
+    stage=DiagnosticStage.INTERRUPTED,
+)
+
 
 def _seconds(count: Any) -> ColumnElement[Any]:
     """Seconds as an interval.
@@ -314,6 +323,33 @@ class HarvestRepository:
             self.session.refresh(current)
             return _job(current)
 
+    def cancel_provider_jobs(self, provider_id: str) -> list[HarvestJob]:
+        """Cancel every unfinished job for one Provider, with the same rules as ``cancel``.
+
+        Disabling a Provider stops admission and makes the next ``heartbeat`` read as a
+        stop request, but it neither empties the queue nor interrupts an upstream wait
+        already in flight. Callers that promise a pause takes effect immediately must call
+        this as well; running jobs still stop cooperatively, so the returned rows record
+        requested cancellations, not completed ones.
+        """
+        with self.session.begin():
+            rows = self.session.scalars(
+                select(JobRow)
+                .where(JobRow.provider_id == provider_id, JobRow.status.in_(_ACTIVE_STATUSES))
+                .order_by(JobRow.id)
+                .with_for_update()
+            ).all()
+            for row in rows:
+                if row.status == JobStatus.QUEUED.value:
+                    row.status = JobStatus.CANCELLED.value
+                    row.finished_at = func.now()
+                else:
+                    row.cancel_requested = True
+            self.session.flush()
+            for row in rows:
+                self.session.refresh(row)
+            return [_job(row) for row in rows]
+
     def begin_item(
         self, job_id: int, native_table_id: str, *, table_id: str | None = None
     ) -> HarvestItem:
@@ -395,6 +431,22 @@ class HarvestRepository:
     def finish_job(
         self, job_id: int, status: JobStatus, *, error: Diagnostic | None = None
     ) -> HarvestJob:
+        """Finalize the job the caller owns, and return the terminal state it actually got.
+
+        The requested status is an intent, not the outcome. Cancellation can arrive while
+        the last item is being written, so the decision is made here, under the job row
+        lock, from the flag as it stands inside this transaction:
+
+        * a cancellation observed at this instant outranks normal completion, and a job
+          the caller reports as cancelled records the request it acted on;
+        * a genuine failure keeps its status and its diagnostic, because "cancelled" would
+          discard the only explanation of what went wrong;
+        * items still running are closed as failed with the reason the job ended, so a
+          cancelled job never leaves an item that no worker will ever finish.
+
+        Reporting completion while items are still running is a caller defect, not a race,
+        and still raises.
+        """
         if status not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             raise ValueError("finish_job requires a terminal job status")
         if (status is JobStatus.FAILED) != (error is not None):
@@ -407,8 +459,12 @@ class HarvestRepository:
             ).one_or_none()
             if current is None or current.status != JobStatus.RUNNING.value:
                 raise OwnershipLost("Job is no longer running")
-            if bool(current.cancel_requested) != (status is JobStatus.CANCELLED):
-                raise ValueError("cancelled jobs require an observed cancellation request")
+            cancelling = status is JobStatus.CANCELLED or (
+                bool(current.cancel_requested) and status is JobStatus.COMPLETED
+            )
+            if cancelling:
+                status, error = JobStatus.CANCELLED, None
+                current.cancel_requested = True
             unfinished = self.session.scalar(
                 select(literal(1))
                 .select_from(ItemRow)
@@ -416,9 +472,9 @@ class HarvestRepository:
                 .limit(1)
             )
             if unfinished is not None:
-                if status is not JobStatus.FAILED or error is None:
+                if status is JobStatus.COMPLETED:
                     raise ValueError("job has unfinished items")
-                self._fail_running_items(job_id, error)
+                self._fail_running_items(job_id, error or _INTERRUPTED)
             current.status = status.value
             current.finished_at = func.now()
             current.error = _diagnostic(error)
