@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -32,6 +33,14 @@ class JobTrigger(StrEnum):
     SCHEDULE = "schedule"
 
 
+class DiagnosticStage(StrEnum):
+    DISCOVERY = "discovery"
+    FETCH_METADATA = "fetch_metadata"
+    NORMALIZE = "normalize"
+    PERSIST = "persist"
+    INTERRUPTED = "interrupted"
+
+
 class HarvestRequest(CoreModel):
     table_id: str | None = None
     force: bool = False
@@ -59,6 +68,21 @@ class DiscoveryScope(CoreModel):
     table_id: str | None = None
     languages: list[str]
 
+    @field_validator("table_id")
+    @classmethod
+    def validate_table_id(cls, value: str | None) -> str | None:
+        if value is not None and not CANONICAL_ID_PATTERN.fullmatch(value):
+            raise ValueError("table_id must be a canonical table slug")
+        return value
+
+    @field_validator("languages")
+    @classmethod
+    def normalize_languages(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(language.strip().lower() for language in value))
+        if not normalized or any(not language for language in normalized):
+            raise ValueError("languages must contain nonempty codes")
+        return normalized
+
 
 class DiscoveryEntry(CoreModel):
     source_table_id: str = Field(min_length=1)
@@ -66,8 +90,19 @@ class DiscoveryEntry(CoreModel):
     marker: dict[str, Any] | None = None
     fetch_parameters: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("available_languages")
+    @classmethod
+    def normalize_languages(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = list(dict.fromkeys(language.strip().lower() for language in value))
+        if not normalized or any(not language for language in normalized):
+            raise ValueError("available_languages must contain nonempty codes")
+        return normalized
+
 
 class DiscoveryResult(CoreModel):
+    scope: DiscoveryScope
     entries: list[DiscoveryEntry]
     authoritative: bool
 
@@ -87,12 +122,27 @@ class LanguageState(CoreModel):
     last_harvested_at: datetime | None = None
     failed: bool = False
 
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("language must not be blank")
+        return normalized
+
 
 class Diagnostic(CoreModel):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
-    stage: str | None = None
+    stage: DiagnosticStage | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def cap_serialized_size(self) -> Diagnostic:
+        payload = self.model_dump(mode="json")
+        if len(json.dumps(payload, ensure_ascii=False).encode()) > 16 * 1024:
+            raise ValueError("diagnostic exceeds 16 KiB")
+        return self
 
 
 class HarvestJob(CoreModel):
@@ -127,3 +177,9 @@ class HarvestSchedule(CoreModel):
     every_seconds: int = Field(gt=0)
     next_run_at: datetime
     request: HarvestRequest
+
+
+class QueueCount(CoreModel):
+    provider_id: str
+    status: JobStatus
+    count: int = Field(ge=1)

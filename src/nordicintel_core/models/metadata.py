@@ -31,6 +31,13 @@ class Category(CoreModel):
     note: str | None = None
     unit: dict[str, Any] | None = None
 
+    @field_validator("code")
+    @classmethod
+    def reject_blank_code(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("category code must not be blank")
+        return value
+
 
 class Dimension(CoreModel):
     code: str = Field(min_length=1)
@@ -39,6 +46,13 @@ class Dimension(CoreModel):
     role: str | None = None
     note: str | None = None
     categories: list[Category] = Field(min_length=1)
+
+    @field_validator("code")
+    @classmethod
+    def reject_blank_code(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("dimension code must not be blank")
+        return value
 
     @model_validator(mode="after")
     def validate_categories(self) -> Dimension:
@@ -78,6 +92,21 @@ class NormalizedTableMetadata(CoreModel):
             raise ValueError("language must not be blank")
         return normalized
 
+    @field_validator("provider_id")
+    @classmethod
+    def validate_provider_id(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not CANONICAL_ID_PATTERN.fullmatch(normalized):
+            raise ValueError("provider_id must be a canonical identifier")
+        return normalized
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, value: list[str]) -> list[str]:
+        if any(not alias.strip() or "/" in alias for alias in value):
+            raise ValueError("aliases must be nonempty URL path segments")
+        return value
+
     @model_validator(mode="after")
     def validate_structure(self) -> NormalizedTableMetadata:
         if not CANONICAL_ID_PATTERN.fullmatch(self.table_id):
@@ -92,12 +121,35 @@ class NormalizedTableMetadata(CoreModel):
         invalid = {code for values in self.roles.values() for code in values} - known
         if invalid:
             raise ValueError(f"role references unknown dimensions: {sorted(invalid)}")
-        role_members = [code for values in self.roles.values() for code in values]
+        normalized_roles = {role: list(values) for role, values in self.roles.items()}
+        declared = {code: role for role, values in normalized_roles.items() for code in values}
+        for dimension in self.dimensions:
+            if dimension.role is not None and dimension.code in declared:
+                if declared[dimension.code] != dimension.role:
+                    raise ValueError(f"dimension {dimension.code!r} has conflicting roles")
+            elif dimension.role is not None:
+                normalized_roles.setdefault(dimension.role, []).append(dimension.code)
+                declared[dimension.code] = dimension.role
+            object.__setattr__(dimension, "role", declared.get(dimension.code))
+        object.__setattr__(self, "roles", normalized_roles)
+        role_members = [code for values in normalized_roles.values() for code in values]
         if len(role_members) != len(set(role_members)):
             raise ValueError("a dimension cannot belong to more than one role")
         if len(self.aliases) != len(set(self.aliases)):
             raise ValueError("aliases must be unique")
         return self
+
+
+class TableSearchResult(CoreModel):
+    table_id: str
+    provider_id: str
+    language: str
+    label: str
+    description: str | None = None
+    discontinued: bool
+    operator_disabled: bool
+    availability_status: AvailabilityStatus
+    rank: float = Field(ge=0)
 
 
 def deterministic_hash(value: Any) -> str:

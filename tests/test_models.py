@@ -84,4 +84,6 @@ def test_data_cube_requires_aligned_status_channel() -> None:
 def test_discovery_rejects_duplicate_source_ids() -> None:
     entry = DiscoveryEntry(source_table_id="TAB1")
     with pytest.raises(ValidationError, match="must be unique"):
-        DiscoveryResult(entries=[entry, entry], authoritative=True)
+        DiscoveryResult(
+            scope={"languages": ["sv"]}, entries=[entry, entry], authoritative=True
+        )

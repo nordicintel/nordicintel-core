@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
+from typing import Any
 
 import pytest
 
@@ -12,11 +15,13 @@ from nordicintel_core.database import (
     ScheduleRepository,
     connect,
 )
-from nordicintel_core.errors import AdmissionError
+from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
     Category,
     Diagnostic,
     Dimension,
+    DiscoveryResult,
+    DiscoveryScope,
     HarvestRequest,
     ItemStatus,
     JobStatus,
@@ -84,13 +89,23 @@ def metadata(
     )
 
 
+def start_job(connection: Any, provider_id: str = "scb") -> int:
+    queue = HarvestRepository(connection)
+    queued = queue.enqueue(provider_id, HarvestRequest())
+    claimed = queue.claim()
+    assert claimed is not None and claimed.id == queued.id
+    return claimed.id
+
+
 def test_metadata_round_trip_search_and_operator_ownership() -> None:
     with connect(database_url()) as connection:
         ProviderRepository(connection).upsert(provider("scb"))
+        job_id = start_job(connection)
         repository = MetadataRepository(connection)
-        assert repository.upsert_language(metadata()) == "scb-tab1"
+        assert repository.upsert_language(job_id, metadata()) == "scb-tab1"
+        assert repository.search("Befolkning")[0].table_id == "scb-tab1"
         repository.set_operator_disabled("scb-tab1", True)
-        repository.upsert_language(metadata(label="Folkmängd"))
+        repository.upsert_language(job_id, metadata(label="Folkmängd"))
 
         restored = repository.get_language("scb-tab1", "SV")
         assert restored is not None
@@ -98,6 +113,7 @@ def test_metadata_round_trip_search_and_operator_ownership() -> None:
         assert [category.code for category in restored.dimensions[0].categories] == ["01", "02"]
         assert restored.roles == {"geo": ["region"], "time": ["year"]}
         assert repository.resolve_id("scb-old-tab1") == "scb-tab1"
+        assert repository.search("Folkmängd") == []
         row = connection.execute(
             "SELECT operator_disabled, search_document @@ "
             "plainto_tsquery('simple', 'Folkmängd') AS found "
@@ -108,19 +124,58 @@ def test_metadata_round_trip_search_and_operator_ownership() -> None:
         assert row == {"operator_disabled": True, "found": True}
 
 
+def test_language_failure_does_not_invalidate_successful_language_state() -> None:
+    with connect(database_url()) as connection:
+        ProviderRepository(connection).upsert(provider("scb"))
+        job_id = start_job(connection)
+        repository = MetadataRepository(connection)
+        repository.upsert_language(job_id, metadata())
+        english = metadata(label="Population").model_copy(update={"language": "en"})
+        repository.upsert_language(job_id, english)
+        repository.record_failure(
+            job_id,
+            "scb-tab1",
+            Diagnostic(code="upstream_timeout", message="Metadata request timed out."),
+            language="sv",
+        )
+        repository.upsert_language(job_id, english)
+
+        states = repository.load_language_state("scb-tab1")
+        assert states["sv"].failed is True
+        assert states["en"].failed is False
+        assert repository.get_language("scb-tab1", "sv") is not None
+
+
 def test_metadata_and_marker_roll_back_when_alias_conflicts() -> None:
     with connect(database_url()) as connection:
         ProviderRepository(connection).upsert(provider("scb"))
+        job_id = start_job(connection)
         repository = MetadataRepository(connection)
-        repository.upsert_language(metadata())
+        repository.upsert_language(job_id, metadata())
         second = metadata(table_id="scb-tab2", label="Second").model_copy(
             update={"native_table_id": "TAB2", "aliases": ["scb-tab1"]}
         )
         with pytest.raises(AdmissionError):
-            repository.upsert_language(second)
+            repository.upsert_language(job_id, second)
 
         assert repository.get_language("scb-tab2", "sv") is None
-        assert repository.get_language("scb-tab1", "sv").label == "Befolkning"  # type: ignore[union-attr]
+        original = repository.get_language("scb-tab1", "sv")
+        assert original is not None and original.label == "Befolkning"
+
+
+def test_retirement_requires_authoritative_provider_wide_discovery() -> None:
+    with connect(database_url()) as connection:
+        ProviderRepository(connection).upsert(provider("scb"))
+        job_id = start_job(connection)
+        repository = MetadataRepository(connection)
+        repository.upsert_language(job_id, metadata())
+        incomplete = DiscoveryResult(
+            scope=DiscoveryScope(languages=["sv"]), entries=[], authoritative=False
+        )
+        with pytest.raises(ValueError, match="authoritative"):
+            repository.retire_unseen(job_id, "scb", incomplete)
+        authoritative = incomplete.model_copy(update={"authoritative": True})
+        assert repository.retire_unseen(job_id, "scb", authoritative) == ["scb-tab1"]
 
 
 def test_queue_serializes_provider_but_skips_to_free_provider() -> None:
@@ -164,10 +219,55 @@ def test_item_lifecycle_idempotency_and_cancellation() -> None:
         item = queue.begin_item(claimed.id, "TAB1")
         queue.finish_item(claimed.id, item.id, ItemStatus.SKIPPED)
         assert queue.heartbeat(claimed.id) is False
+        ProviderRepository(connection).set_enabled("scb", False)
+        assert queue.heartbeat(claimed.id) is True
+        ProviderRepository(connection).set_enabled("scb", True)
         assert queue.cancel(claimed.id).cancel_requested is True
         finished = queue.finish_job(claimed.id, JobStatus.CANCELLED)
         assert finished.status is JobStatus.CANCELLED
         queue.release_provider("scb")
+
+
+def test_cancelled_queued_job_cannot_be_claimed() -> None:
+    with connect(database_url()) as connection:
+        ProviderRepository(connection).upsert(provider("scb"))
+        queue = HarvestRepository(connection)
+        job = queue.enqueue("scb", HarvestRequest())
+        assert queue.cancel(job.id).status is JobStatus.CANCELLED
+        assert queue.claim() is None
+
+
+def test_concurrent_idempotent_admission_returns_one_job() -> None:
+    with connect(database_url()) as connection:
+        ProviderRepository(connection).upsert(provider("scb"))
+    barrier = Barrier(2)
+
+    def enqueue() -> int:
+        with connect(database_url()) as connection:
+            barrier.wait()
+            return HarvestRepository(connection).enqueue(
+                "scb", HarvestRequest(languages=["sv"]), request_key="concurrent"
+            ).id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        ids = list(executor.map(lambda _: enqueue(), range(2)))
+    assert ids[0] == ids[1]
+    with connect(database_url()) as connection:
+        assert len(HarvestRepository(connection).list_jobs()) == 1
+
+
+def test_scheduler_singleton_lock_is_session_owned() -> None:
+    first = connect(database_url())
+    second = connect(database_url())
+    try:
+        assert ScheduleRepository(first).try_singleton_lock() is True
+        assert ScheduleRepository(second).try_singleton_lock() is False
+        ScheduleRepository(first).release_singleton_lock()
+        assert ScheduleRepository(second).try_singleton_lock() is True
+        ScheduleRepository(second).release_singleton_lock()
+    finally:
+        first.close()
+        second.close()
 
 
 def test_schedule_is_atomic_and_stale_job_recovers_after_owner_disconnect() -> None:
@@ -191,9 +291,15 @@ def test_schedule_is_atomic_and_stale_job_recovers_after_owner_disconnect() -> N
         "UPDATE harvest_job SET heartbeat_at = now() - interval '10 minutes' WHERE id = %s",
         (claimed.id,),
     )
+    with connect(database_url()) as live_recovery:
+        assert HarvestRepository(live_recovery).recover_stale(180) == []
     owner.close()
 
     with connect(database_url()) as recovery:
+        with pytest.raises(OwnershipLost, match="no longer owned"):
+            HarvestRepository(recovery).heartbeat(claimed.id)
+        with pytest.raises(OwnershipLost, match="not running on this connection"):
+            MetadataRepository(recovery).upsert_language(claimed.id, metadata())
         assert HarvestRepository(recovery).recover_stale(180) == [claimed.id]
         recovered = HarvestRepository(recovery).get_job(claimed.id)
         assert recovered is not None and recovered.status is JobStatus.FAILED

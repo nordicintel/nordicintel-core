@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
     Diagnostic,
+    DiagnosticStage,
     HarvestItem,
     HarvestJob,
     HarvestRequest,
@@ -16,6 +17,7 @@ from nordicintel_core.models import (
     ItemStatus,
     JobStatus,
     JobTrigger,
+    QueueCount,
 )
 
 from ._typing import Connection, Row, page
@@ -27,7 +29,9 @@ def _diagnostic(value: Diagnostic | None) -> Jsonb | None:
 
 
 def _job(row: Row) -> HarvestJob:
-    return HarvestJob.model_validate(row)
+    data = dict(row)
+    data.pop("owner_backend_pid", None)
+    return HarvestJob.model_validate(data)
 
 
 def _item(row: Row) -> HarvestItem:
@@ -101,6 +105,10 @@ class HarvestRepository:
         ).fetchall()
         return [_job(row) for row in rows]
 
+    def queue_counts(self) -> list[QueueCount]:
+        rows = self.connection.execute(read_query("queue_counts.sql")).fetchall()
+        return [QueueCount.model_validate(row) for row in rows]
+
     def claim(self) -> HarvestJob | None:
         excluded: list[str] = []
         while True:
@@ -136,7 +144,7 @@ class HarvestRepository:
         row = self.connection.execute(read_query("job_heartbeat.sql"), (job_id,)).fetchone()
         if row is None:
             raise OwnershipLost("Running job is no longer owned")
-        return bool(row["cancel_requested"])
+        return bool(row["stop_requested"])
 
     def cancel(self, job_id: int) -> HarvestJob:
         with self.connection.transaction():
@@ -163,7 +171,7 @@ class HarvestRepository:
         with self.connection.transaction():
             row = self.connection.execute(
                 read_query("item_begin.sql"),
-                (job_id, source_table_id, table_id, job_id),
+                (job_id, source_table_id, table_id, job_id, table_id, table_id),
             ).fetchone()
         if row is None:
             raise OwnershipLost("Job is not running")
@@ -185,7 +193,15 @@ class HarvestRepository:
         with self.connection.transaction():
             row = self.connection.execute(
                 read_query("item_finish.sql"),
-                (status.value, _diagnostic(error), table_id, item_id, job_id),
+                (
+                    status.value,
+                    _diagnostic(error),
+                    table_id,
+                    item_id,
+                    job_id,
+                    table_id,
+                    table_id,
+                ),
             ).fetchone()
         if row is None:
             raise OwnershipLost("Item or job is no longer running")
@@ -220,11 +236,17 @@ class HarvestRepository:
             ).fetchone()
             if current is None or current["status"] != JobStatus.RUNNING.value:
                 raise OwnershipLost("Job is no longer running")
+            if bool(current["cancel_requested"]) != (status is JobStatus.CANCELLED):
+                raise ValueError("cancelled jobs require an observed cancellation request")
             unfinished = self.connection.execute(
                 read_query("item_running_exists.sql"), (job_id,)
             ).fetchone()
             if unfinished is not None:
-                raise ValueError("job has unfinished items")
+                if status is not JobStatus.FAILED or error is None:
+                    raise ValueError("job has unfinished items")
+                self.connection.execute(
+                    read_query("item_fail_running.sql"), (_diagnostic(error), job_id)
+                )
             row = self.connection.execute(
                 read_query("job_finish.sql"), (status.value, _diagnostic(error), job_id)
             ).fetchone()
@@ -249,7 +271,7 @@ class HarvestRepository:
                 diagnostic = Diagnostic(
                     code="worker_abandoned",
                     message="The worker session ended before the job completed.",
-                    stage="interrupted",
+                    stage=DiagnosticStage.INTERRUPTED,
                 )
                 with self.connection.transaction():
                     current = self.connection.execute(
@@ -275,6 +297,21 @@ class HarvestRepository:
 class ScheduleRepository:
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
+
+    def try_singleton_lock(self) -> bool:
+        row = self.connection.execute(read_query("scheduler_try_lock.sql")).fetchone()
+        return bool(row["acquired"])
+
+    def release_singleton_lock(self) -> None:
+        row = self.connection.execute(read_query("scheduler_unlock.sql")).fetchone()
+        if row is None or not row["released"]:
+            raise OwnershipLost("Scheduler lock is not owned by this connection")
+
+    def get(self, provider_id: str) -> HarvestSchedule | None:
+        row = self.connection.execute(
+            read_query("schedule_get.sql"), (provider_id,)
+        ).fetchone()
+        return None if row is None else HarvestSchedule.model_validate(row)
 
     def upsert(
         self,

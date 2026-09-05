@@ -4,6 +4,7 @@ from .adapters import AdapterFactory, AsyncHttpClient, NordicIntelAdapter
 from .data import DataCube, DimensionSelection, ExplicitSelection
 from .harvest import (
     Diagnostic,
+    DiagnosticStage,
     DiscoveryEntry,
     DiscoveryResult,
     DiscoveryScope,
@@ -15,6 +16,7 @@ from .harvest import (
     JobStatus,
     JobTrigger,
     LanguageState,
+    QueueCount,
 )
 from .metadata import (
     AvailabilityStatus,
@@ -22,6 +24,7 @@ from .metadata import (
     Dimension,
     NormalizedTableMetadata,
     ServingMode,
+    TableSearchResult,
     deterministic_hash,
 )
 from .provider import ProviderDefinition
@@ -33,6 +36,7 @@ __all__ = [
     "Category",
     "DataCube",
     "Diagnostic",
+    "DiagnosticStage",
     "Dimension",
     "DimensionSelection",
     "DiscoveryEntry",
@@ -50,6 +54,8 @@ __all__ = [
     "NordicIntelAdapter",
     "NormalizedTableMetadata",
     "ProviderDefinition",
+    "QueueCount",
     "ServingMode",
+    "TableSearchResult",
     "deterministic_hash",
 ]

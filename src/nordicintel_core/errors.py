@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 
 class NordicIntelError(Exception):
     """Base class for safe, typed NordicIntel failures."""
@@ -41,8 +39,3 @@ class UpstreamTransportError(UpstreamError):
 
 class UpstreamResponseError(UpstreamError):
     """The upstream returned a non-success response."""
-
-
-def sanitized_diagnostic(code: str, message: str, **details: Any) -> dict[str, Any]:
-    """Build a JSON-safe diagnostic without accepting bodies or credentials by convention."""
-    return {"code": code, "message": message, **details}

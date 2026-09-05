@@ -7,6 +7,7 @@ from decimal import Decimal
 from pydantic import Field, field_validator, model_validator
 
 from ._base import CoreModel
+from .metadata import CANONICAL_ID_PATTERN
 
 
 class DimensionSelection(CoreModel):
@@ -18,6 +19,20 @@ class DimensionSelection(CoreModel):
         if len(self.category_codes) != len(set(self.category_codes)):
             raise ValueError("selected category codes must be unique")
         return self
+
+    @field_validator("dimension_code")
+    @classmethod
+    def reject_blank_code(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("dimension_code must not be blank")
+        return value
+
+    @field_validator("category_codes")
+    @classmethod
+    def reject_blank_categories(cls, value: list[str]) -> list[str]:
+        if any(not code.strip() for code in value):
+            raise ValueError("category codes must not be blank")
+        return value
 
 
 class ExplicitSelection(CoreModel):
@@ -32,6 +47,13 @@ class ExplicitSelection(CoreModel):
         if not normalized:
             raise ValueError("language must not be blank")
         return normalized
+
+    @field_validator("table_id")
+    @classmethod
+    def validate_table_id(cls, value: str) -> str:
+        if not CANONICAL_ID_PATTERN.fullmatch(value):
+            raise ValueError("table_id must be a canonical table slug")
+        return value
 
     @model_validator(mode="after")
     def validate_dimensions(self) -> ExplicitSelection:
@@ -58,8 +80,25 @@ class DataCube(CoreModel):
             raise ValueError("language must not be blank")
         return normalized
 
+    @field_validator("table_id")
+    @classmethod
+    def validate_table_id(cls, value: str) -> str:
+        if not CANONICAL_ID_PATTERN.fullmatch(value):
+            raise ValueError("table_id must be a canonical table slug")
+        return value
+
+    @field_validator("statuses")
+    @classmethod
+    def reject_blank_status(cls, value: list[str | None]) -> list[str | None]:
+        if any(status is not None and not status for status in value):
+            raise ValueError("status markers must be nonempty or null")
+        return value
+
     @model_validator(mode="after")
     def validate_shape(self) -> DataCube:
+        codes = [dimension.dimension_code for dimension in self.dimensions]
+        if len(codes) != len(set(codes)):
+            raise ValueError("cube dimensions must be unique")
         expected = 1
         for dimension in self.dimensions:
             expected *= len(dimension.category_codes)

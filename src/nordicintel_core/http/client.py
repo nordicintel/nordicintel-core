@@ -22,6 +22,11 @@ from nordicintel_core.errors import UpstreamResponseError, UpstreamTransportErro
 
 Sleep = Callable[[float], Awaitable[None]]
 Clock = Callable[[], float]
+WallClock = Callable[[], datetime]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +58,7 @@ class HttpClient:
         minimum_interval_seconds: float = 0.0,
         retry_policy: RetryPolicy | None = None,
         clock: Clock = time.monotonic,
+        wall_clock: WallClock = _utc_now,
         sleep: Sleep = asyncio.sleep,
         random_value: Callable[[], float] = random.random,
     ) -> None:
@@ -62,6 +68,7 @@ class HttpClient:
         self._minimum_interval = minimum_interval_seconds
         self._policy = retry_policy or RetryPolicy()
         self._clock = clock
+        self._wall_clock = wall_clock
         self._sleep = sleep
         self._random = random_value
         self._rate_lock = asyncio.Lock()
@@ -87,7 +94,7 @@ class HttpClient:
                         parsed = parsedate_to_datetime(retry_after)
                         if parsed.tzinfo is None:
                             parsed = parsed.replace(tzinfo=UTC)
-                        return max(0.0, (parsed - datetime.now(UTC)).total_seconds())
+                        return max(0.0, (parsed - self._wall_clock()).total_seconds())
                     except (TypeError, ValueError, OverflowError):
                         pass
         ceiling = min(

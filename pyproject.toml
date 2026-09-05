@@ -40,7 +40,16 @@ dev = [
 packages = ["src/nordicintel_core"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "CONTEXT.md", "docs/adr", "pyproject.toml"]
+include = [
+  ".github",
+  "src",
+  "tests",
+  "CHANGELOG.md",
+  "CONTEXT.md",
+  "README.md",
+  "docs",
+  "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"

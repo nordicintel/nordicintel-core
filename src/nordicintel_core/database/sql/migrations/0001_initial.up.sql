@@ -21,6 +21,7 @@ CREATE TABLE dataset (
     operator_disabled boolean NOT NULL DEFAULT false,
     availability_status text NOT NULL DEFAULT 'available'
         CHECK (availability_status IN ('available', 'unavailable')),
+    failed_languages text[] NOT NULL DEFAULT '{}'::text[],
     last_error jsonb CHECK (last_error IS NULL OR jsonb_typeof(last_error) = 'object'),
     last_harvested_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -29,7 +30,7 @@ CREATE TABLE dataset (
 );
 
 CREATE TABLE dataset_alias (
-    alias text PRIMARY KEY CHECK (alias ~ '^[a-z0-9][a-z0-9._-]*$'),
+    alias text PRIMARY KEY CHECK (length(alias) > 0 AND position('/' in alias) = 0),
     dataset_id text NOT NULL REFERENCES dataset(id),
     kind text NOT NULL DEFAULT 'native',
     valid_from timestamptz NOT NULL DEFAULT now(),
@@ -109,9 +110,12 @@ CREATE TABLE harvest_job (
     created_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
     heartbeat_at timestamptz,
+    owner_backend_pid integer,
     finished_at timestamptz,
     error jsonb CHECK (error IS NULL OR jsonb_typeof(error) = 'object'),
-    CHECK (status <> 'running' OR (started_at IS NOT NULL AND heartbeat_at IS NOT NULL)),
+    CHECK (status <> 'running' OR (
+        started_at IS NOT NULL AND heartbeat_at IS NOT NULL AND owner_backend_pid IS NOT NULL
+    )),
     CHECK (status NOT IN ('completed', 'failed', 'cancelled') OR finished_at IS NOT NULL),
     CHECK (status <> 'failed' OR error IS NOT NULL)
 );
