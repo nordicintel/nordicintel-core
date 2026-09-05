@@ -8,8 +8,9 @@ same entities, and `tests/test_schema.py` fails if a migrated database and the d
 model disagree. There are no packaged `.sql` resources: a schema edit that a query has not
 followed is now a failing test rather than a runtime error.
 
-`table_registry` owns canonical/native identity, serving mode, operator controls, worker
-availability, and retirement after authoritative discovery. `table_metadata` owns one
+`table_registry` owns canonical/native identity, serving mode, operator controls and
+worker availability. It records nothing about absence: a Table that stops appearing
+upstream keeps its identity and its stored metadata untouched. `table_metadata` owns one
 language's catalog fields and complete metadata-only JSON-stat Dataset in JSONB.
 `table_language_state` owns comparison markers, hashes, successful check/harvest times,
 and outstanding language errors. The state row can exist without a metadata row.
@@ -24,10 +25,15 @@ Reads load the entire Dataset from one row, preventing mixed-revision structures
 Models validate JSON-stat and known PxWeb metadata semantics. SQL additionally enforces
 that the stored document is a Dataset with `value: []` and no `status`.
 
-Publisher `discontinued`, discovery retirement, worker failure, and operator disabling
-remain separate. Refreshing a language clears only its own outstanding failure; worker
-writes never overwrite operator controls. The search policy hides retired and publisher-
-discontinued tables by default.
+Publisher `discontinued`, worker failure and operator disabling remain separate, and are
+owned by different parties. `discontinued` is the publisher's statement that a series is
+finished; it is stored exactly as harvested and never inferred. Refreshing a language
+clears only its own outstanding failure; worker writes never overwrite operator controls.
+
+Search returns discontinued Tables by default. A finished series is still real, still
+harvested and still the right answer to a search for it, so excluding it is the caller's
+decision (`include_discontinued=False`) rather than a silent one. Operator disabling and
+worker-observed unavailability are ours, and are enforced whatever the caller asks for.
 
 Repository results are application models, never ORM objects. `get_table` supplies
 native routing identity/controls, `get_language` supplies `TableLanguageMetadata`, and
@@ -39,12 +45,15 @@ native_table_id)` is the lookup a worker uses before it has a canonical identity
 `canonical_slug` mints a name and is not a lookup: a collision appends a suffix, so a
 rebuilt slug can address a different Table or none.
 
-`reconcile_inventory` decides `retired` in both directions from one authoritative
-provider-wide discovery, and returns the Tables whose absence flag changed. Presence has
-to decide it alone: an unchanged Table is skipped rather than accepted, so acceptance
-would leave a Table that reappeared retired until its content next changed. Only
-`retired` is written; the publisher's `discontinued` and the operator's controls describe
-different decisions and are never inferred from presence.
+There is no absence handling. A Table missing from a later run is left exactly as it was,
+and stays served. Deciding what a disappearance means is a judgement worth making
+deliberately and separately, and every earlier attempt at it turned a per-language
+catalogue difference into data loss.
+
+`harvest_job` and `harvest_schedule` both carry a `language` column mirroring their
+request, because admission asks "is this Provider already busy in this language?" on every
+enqueue. A Provider served in two languages has two schedules, which run on their own
+intervals and neither of which can starve the other.
 
 The initial migration is rebuilt for this predeployment model. It is a clean initial
 schema, with no compatibility migration from the discarded design.

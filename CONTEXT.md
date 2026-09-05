@@ -21,12 +21,15 @@ A provider-family integration that discovers Tables and translates metadata and 
 _Avoid_: Provider, harvester
 
 **Discovery**:
-An Adapter's enumeration of Tables in a requested provider scope, together with whether that
-enumeration is authoritative for absence-based retirement.
+An Adapter's enumeration of the Tables a Provider publishes in one language. It reports what
+is there; nothing infers anything from what is missing.
 _Avoid_: Harvest
 
 **Harvest Job**:
-One requested traversal of a Provider or a single Table, retained as its execution history.
+One requested traversal of a Provider, or of a single Table, in exactly one language,
+retained as its execution history. The language is part of the request because a catalogue
+is published per language: a Table carried in Swedish and not in English is absent from the
+English catalogue rather than empty in it.
 _Avoid_: Run, attempt
 
 **Harvest Item**:

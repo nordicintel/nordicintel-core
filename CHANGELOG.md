@@ -2,6 +2,39 @@
 
 ## Unreleased — breaking metadata/schema rewrite
 
+- **A harvest run is one Provider in one language.** `HarvestRequest.language` and
+  `DiscoveryScope.language` are required scalars, replacing the optional language *set*.
+  A catalogue is published per language, and a Table carried in Swedish and not in English
+  is absent from the English catalogue rather than empty in it — so a run over several
+  languages had to decide, per Table, which languages that Table actually had. No request
+  could answer that and no adapter could be asked without inventing a signal for it.
+  Naming the language removes the question instead of answering it: discovery enumerates
+  one language, and every Table it returns can be fetched in it as a matter of fact.
+- Adapter protocol, accordingly: `resolve_languages` becomes `supported_languages`,
+  `languages_to_refresh(entry, stored, requested, force=...) -> list[str]` becomes
+  `should_refresh(entry, stored, force=...) -> bool`, and
+  `fetch_metadata(entry, languages) -> list[...]` becomes
+  `fetch_metadata(entry, language) -> MetadataFetchResult`. The list return had no way to
+  express a partial failure, so an empty or short result was ambiguous by construction.
+- `DiscoveryEntry.available_languages` is removed. Membership of a language's enumeration
+  is the whole of that statement.
+- `harvest_job` and `harvest_schedule` carry a `language` column, and a schedule is keyed
+  by `(provider_id, language)`. Admission and `enqueue_due` treat a Provider as busy per
+  language: two languages are different work, and folding them together starved whichever
+  one lost the tie.
+- **Absence handling is removed.** `TableRecord.retired`, `DiscoveryResult.authoritative`,
+  `InventoryReconciliation` and `MetadataRepository.reconcile_inventory` are all gone. A
+  Table missing from a later run is now left exactly as it was and stays served. Deciding
+  what a disappearance means is worth doing deliberately; the mechanism as it stood turned
+  ordinary per-language catalogue differences into silent data loss.
+- `MetadataRepository.search` returns discontinued Tables by default
+  (`include_discontinued=True`). A series the publisher has finished is still real, still
+  harvested and still the right answer to a search for it. `discontinued` itself is
+  unchanged: a publisher-owned attribute, stored as harvested and never inferred.
+- `list_jobs` gains a `language` filter and `list_schedules` a `provider_id` filter.
+- `0001_initial` is regenerated from the model. Nothing is deployed, so this is a
+  replacement rather than an upgrade path.
+
 - Add `MetadataRepository.get_table_by_native()`. Discovery yields upstream identifiers,
   and `canonical_slug` is a minting rule rather than a lookup: a collision appends a
   suffix, so a rebuilt slug can address a different Table or none.

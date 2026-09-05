@@ -6,9 +6,17 @@ Adapters never receive a database connection.
 
 ## Metadata
 
-`fetch_metadata(entry, languages)` returns `list[MetadataFetchResult]`. Each result has
-`provider_id`, exact `native_table_id`, `metadata: LanguageMetadata`, and an optional
-opaque `comparison_marker`. Core mints/resolves the canonical Table ID during acceptance.
+`fetch_metadata(entry, language)` returns one `MetadataFetchResult`, with `provider_id`,
+exact `native_table_id`, `metadata: LanguageMetadata`, and an optional opaque
+`comparison_marker`. One call, one language, one result: failure is raised rather than
+represented as a missing element of a returned list, so a caller never has to decide what
+an absent result was supposed to mean. Core mints/resolves the canonical Table ID during
+acceptance.
+
+`should_refresh(entry, stored, force=...)` decides whether that fetch is needed at all.
+`stored` is the `LanguageState` core holds for this Table in this language, or None if it
+has never been accepted. Only the adapter knows what its own marker means, so only the
+adapter answers it.
 
 `LanguageMetadata` has `language`, `catalog: TableCatalogMetadata`, and
 `dataset: nordicintel_core.jsonstat.JsonStatDataset`. Construct it from typed objects
@@ -48,9 +56,15 @@ Adapters own upstream discovery, URL/query construction, authentication, native 
 and marker semantics. A publication timestamp is a safe skip marker only if the adapter
 knows it covers relevant metadata changes.
 
-`DiscoveryResult.authoritative` can be true only after the complete provider scope was
-enumerated. Incomplete/single-table discovery must not retire unseen tables, and
-`reconcile_inventory` refuses a scope that names a Table for exactly that reason.
+`DiscoveryScope.language` is required, and is the language the enumeration is *in* rather
+than a filter over it. Catalogues are published per language: a Table never published in
+English is absent from the English listing, and asking for it in English is an upstream
+error rather than an empty result. Listing in the scope's own language therefore makes
+"can this Table be fetched in this language" a fact about the response instead of
+something the host has to infer per Table.
+
+Nothing acts on a Table's absence, so a `DiscoveryResult` makes no claim about
+completeness. Report the Tables that are there.
 
 `DiscoveryScope.table_id` is canonical and an adapter cannot resolve it. When a job is
 narrowed to one Table the worker resolves it first and also supplies
