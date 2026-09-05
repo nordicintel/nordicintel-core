@@ -1,9 +1,0 @@
-DROP TABLE IF EXISTS harvest_item;
-DROP TABLE IF EXISTS harvest_job;
-DROP TABLE IF EXISTS harvest_schedule;
-DROP TABLE IF EXISTS category;
-DROP TABLE IF EXISTS dimension;
-DROP TABLE IF EXISTS dataset_metadata;
-DROP TABLE IF EXISTS dataset_alias;
-DROP TABLE IF EXISTS dataset;
-DROP TABLE IF EXISTS provider;
