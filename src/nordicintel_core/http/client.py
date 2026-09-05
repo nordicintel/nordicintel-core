@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+# httpx has been abandoned and is no longer actively maintained.
+# Switch to aiohttp later.
 try:
     import httpx
 except ImportError as exc:  # pragma: no cover - exercised by packaging smoke tests
