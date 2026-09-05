@@ -121,6 +121,7 @@ class LanguageState(CoreModel):
     last_checked_at: datetime | None = None
     last_harvested_at: datetime | None = None
     failed: bool = False
+    last_error: dict[str, Any] | None = None
 
     @field_validator("language")
     @classmethod

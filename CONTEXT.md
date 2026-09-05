@@ -34,6 +34,6 @@ The outcome of processing one upstream Table during a Harvest Job.
 _Avoid_: Task, queue item
 
 **Language Metadata**:
-The combined catalogue and Dataset metadata for one language of a Table, including its labels,
-publication details, classifications, notes, dimensions, categories, and statistical extensions.
+The catalogue information and statistical Dataset describing one language of a Table.
+It includes that language's labels, classifications, notes, dimensions, categories, and statistical extensions.
 _Avoid_: Translation

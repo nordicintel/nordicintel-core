@@ -30,10 +30,10 @@ from nordicintel_core.models import (
 )
 
 from ._typing import page
-from .schema import Dataset, Provider
 from .schema import HarvestItem as ItemRow
 from .schema import HarvestJob as JobRow
 from .schema import HarvestSchedule as ScheduleRow
+from .schema import Provider, TableRecord
 
 # One convention, shared by every worker and by recovery. If it changed between releases,
 # two processes could each believe they own a provider, so it is deployment state.
@@ -116,8 +116,8 @@ def _table_belongs_to_job(table_id: str | None) -> ColumnElement[bool]:
         return literal(True)
     return exists(
         select(literal(1))
-        .select_from(Dataset)
-        .where(Dataset.id == table_id, Dataset.provider_id == JobRow.provider_id)
+        .select_from(TableRecord)
+        .where(TableRecord.id == table_id, TableRecord.provider_id == JobRow.provider_id)
     )
 
 
@@ -150,7 +150,7 @@ class HarvestRepository:
                 raise AdmissionError(409, "Provider is disabled")
             if request.table_id is not None:
                 owner = self.session.scalar(
-                    select(Dataset.provider_id).where(Dataset.id == request.table_id)
+                    select(TableRecord.provider_id).where(TableRecord.id == request.table_id)
                 )
                 if owner != provider_id:
                     raise AdmissionError(422, "Table does not belong to this provider")
@@ -277,9 +277,7 @@ class HarvestRepository:
 
     def release_provider(self, provider_id: str) -> None:
         with self.session.begin():
-            released = self.session.scalar(
-                select(func.pg_advisory_unlock(_lock_key(provider_id)))
-            )
+            released = self.session.scalar(select(func.pg_advisory_unlock(_lock_key(provider_id))))
         if not released:
             raise OwnershipLost("Provider lock is not owned by this connection")
 

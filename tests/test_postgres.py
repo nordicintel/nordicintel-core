@@ -10,6 +10,7 @@ from threading import Barrier
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from test_models import rich_metadata
 
 from nordicintel_core.database import (
     HarvestRepository,
@@ -21,16 +22,13 @@ from nordicintel_core.database import (
 )
 from nordicintel_core.errors import AdmissionError, OwnershipLost
 from nordicintel_core.models import (
-    Category,
     Diagnostic,
-    Dimension,
     DiscoveryResult,
     DiscoveryScope,
     HarvestRequest,
     ItemStatus,
     JobStatus,
-    Link,
-    NormalizedTableMetadata,
+    MetadataFetchResult,
     ProviderDefinition,
 )
 
@@ -60,8 +58,8 @@ def clean_database() -> None:
     with owner() as session, session.begin():
         session.execute(
             text(
-                "TRUNCATE harvest_item, harvest_job, harvest_schedule, category, dimension, "
-                "dataset_metadata, dataset_alias, dataset, provider RESTART IDENTITY CASCADE"
+                "TRUNCATE harvest_item, harvest_job, harvest_schedule, table_metadata, "
+                "table_language_state, table_registry, provider RESTART IDENTITY CASCADE"
             )
         )
 
@@ -81,41 +79,30 @@ def metadata(
     table_id: str = "scb-tab1",
     label: str = "Befolkning",
     language: str = "sv",
-) -> NormalizedTableMetadata:
-    return NormalizedTableMetadata(
-        provider_id=provider_id,
-        table_id=table_id,
-        native_table_id="TAB1",
-        language=language,
-        label=label,
-        description="Örebro län",
-        source="SCB",
-        updated="2025-03-04",
-        first_period="2024",
-        last_period="2025",
-        variable_names=["Region i katalogen"],
-        links=[Link(rel="self", hreflang="sv", href="https://example.test/tables/TAB1")],
-        comparison_marker={"stamp": label},
-        aliases=[f"{provider_id}-old-tab1"],
-        dimensions=[
-            Dimension(
-                code="region",
-                label="Region",
-                index=0,
-                categories=[
-                    Category(code="01", label="Stockholm", index=0),
-                    Category(code="02", label="Uppsala", index=1),
-                ],
-            ),
-            Dimension(
-                code="year",
-                label="År",
-                index=1,
-                categories=[Category(code="2025", label="2025", index=0)],
-            ),
-        ],
-        roles={"time": ["year"], "geo": ["region"]},
-    )
+) -> MetadataFetchResult:
+    payload = rich_metadata().model_dump(mode="json")
+    payload["provider_id"] = provider_id
+    payload["native_table_id"] = table_id.split("-")[-1].upper()
+    payload["metadata"]["language"] = language
+    payload["metadata"]["catalog"]["label"] = label
+    payload["metadata"]["catalog"]["discontinued"] = False
+    payload["comparison_marker"] = {"stamp": label}
+    payload["metadata"]["dataset"] = {
+        "version": "2.0",
+        "class": "dataset",
+        "id": ["region", "year"],
+        "size": [2, 1],
+        "role": {"geo": ["region"], "time": ["year"]},
+        "dimension": {
+            "region": {
+                "label": "Region",
+                "category": {"index": ["01", "02"], "label": {"01": "Stockholm", "02": "Uppsala"}},
+            },
+            "year": {"label": "År", "category": {"index": ["2025"], "label": {"2025": "2025"}}},
+        },
+        "value": [],
+    }
+    return MetadataFetchResult.model_validate(payload)
 
 
 def start_job(session: Session, provider_id: str = "scb") -> int:
@@ -138,10 +125,11 @@ def test_metadata_round_trip_search_and_operator_ownership() -> None:
 
         restored = repository.get_language("scb-tab1", "SV")
         assert restored is not None
-        assert restored.label == "Folkmängd"
-        assert [category.code for category in restored.dimensions[0].categories] == ["01", "02"]
-        assert restored.roles == {"geo": ["region"], "time": ["year"]}
-        assert repository.resolve_id("scb-old-tab1") == "scb-tab1"
+        assert restored.catalog.label == "Folkmängd"
+        assert list(restored.dataset.dimensions[0].category.codes) == ["01", "02"]
+        assert restored.dataset.role.to_mapping() == {"geo": ["region"], "time": ["year"]}
+        assert repository.resolve_id("scb-tab1") == "scb-tab1"
+        assert repository.resolve_id("scb-old-tab1") is None
         # A harvest must not clear an operator's decision, so the table stays out of search.
         assert repository.search("Folkmängd") == []
         with session.begin():
@@ -149,7 +137,7 @@ def test_metadata_round_trip_search_and_operator_ownership() -> None:
                 text(
                     "SELECT operator_disabled, search_document @@ "
                     "plainto_tsquery('simple', 'Folkmängd') AS found "
-                    "FROM dataset AS d JOIN dataset_metadata AS m ON m.dataset_id = d.id "
+                    "FROM table_registry AS d JOIN table_metadata AS m ON m.table_id = d.id "
                     "WHERE d.id = :table_id AND m.language = 'sv'"
                 ),
                 {"table_id": "scb-tab1"},
@@ -175,14 +163,14 @@ def test_retired_and_discontinued_tables_leave_the_default_search() -> None:
         repository.upsert_language(job_id, metadata())
         assert len(repository.search("Befolkning")) == 1
         with session.begin():
-            session.execute(text("UPDATE dataset SET retired = true"))
+            session.execute(text("UPDATE table_registry SET retired = true"))
         assert repository.search("Befolkning") == []
         assert len(repository.search("Befolkning", include_discontinued=True)) == 1
         with session.begin():
             session.execute(
-                text("UPDATE dataset SET retired = false"),
+                text("UPDATE table_registry SET retired = false"),
             )
-            session.execute(text("UPDATE dataset_metadata SET discontinued = true"))
+            session.execute(text("UPDATE table_metadata SET discontinued = true"))
         assert repository.search("Befolkning") == []
         assert len(repository.search("Befolkning", include_discontinued=True)) == 1
 
@@ -193,7 +181,7 @@ def test_language_failure_does_not_invalidate_successful_language_state() -> Non
         job_id = start_job(session)
         repository = MetadataRepository(session)
         repository.upsert_language(job_id, metadata())
-        english = metadata(label="Population").model_copy(update={"language": "en"})
+        english = metadata(label="Population", language="en")
         repository.upsert_language(job_id, english)
         repository.record_failure(
             job_id,
@@ -209,21 +197,38 @@ def test_language_failure_does_not_invalidate_successful_language_state() -> Non
         assert repository.get_language("scb-tab1", "sv") is not None
 
 
-def test_metadata_and_marker_roll_back_when_alias_conflicts() -> None:
+def test_metadata_and_marker_roll_back_on_persistence_failure(monkeypatch) -> None:
     with owner() as session:
         ProviderRepository(session).upsert(provider("scb"))
         job_id = start_job(session)
         repository = MetadataRepository(session)
         repository.upsert_language(job_id, metadata())
-        second = metadata(table_id="scb-tab2", label="Second").model_copy(
-            update={"native_table_id": "TAB2", "aliases": ["scb-tab1"]}
-        )
-        with pytest.raises(AdmissionError):
-            repository.upsert_language(job_id, second)
+        before = repository.load_language_state("scb-tab1")["sv"]
 
-        assert repository.get_language("scb-tab2", "sv") is None
-        original = repository.get_language("scb-tab1", "sv")
-        assert original is not None and original.label == "Befolkning"
+        def fail(*args):
+            raise RuntimeError("injected failure after metadata and marker writes")
+
+        monkeypatch.setattr(repository, "_mark_success", fail)
+        with pytest.raises(RuntimeError, match="injected"):
+            repository.upsert_language(job_id, metadata(label="Changed"))
+        assert repository.get_language("scb-tab1", "sv").catalog.label == "Befolkning"
+        assert repository.load_language_state("scb-tab1")["sv"] == before
+
+
+def test_first_language_failure_has_state_without_metadata() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        repository.upsert_language(job_id, metadata())
+        repository.record_failure(
+            job_id, "scb-tab1", Diagnostic(code="timeout", message="Timeout"), language="en"
+        )
+        assert repository.get_language("scb-tab1", "en") is None
+        state = repository.load_language_state("scb-tab1")["en"]
+        assert state.failed and state.comparison_marker is None and state.last_harvested_at is None
+        repository.upsert_language(job_id, metadata(language="en"))
+        assert not repository.load_language_state("scb-tab1")["en"].failed
 
 
 def test_retirement_requires_authoritative_provider_wide_discovery() -> None:
@@ -268,8 +273,7 @@ def test_item_lifecycle_idempotency_and_cancellation() -> None:
         queue = HarvestRepository(session)
         job = queue.enqueue("scb", HarvestRequest(languages=["SV"]), request_key="same")
         assert (
-            queue.enqueue("scb", HarvestRequest(languages=["sv"]), request_key="same").id
-            == job.id
+            queue.enqueue("scb", HarvestRequest(languages=["sv"]), request_key="same").id == job.id
         )
         with pytest.raises(AdmissionError, match="another request"):
             queue.enqueue("scb", HarvestRequest(force=True), request_key="same")
@@ -433,3 +437,46 @@ def test_no_transaction_is_left_open_between_operations() -> None:
 
 def _only_job(queue: HarvestRepository) -> int:
     return queue.list_jobs()[0].id
+
+
+def test_native_identity_is_preserved_on_canonical_collision() -> None:
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        first = metadata()
+        second = metadata().model_copy(update={"native_table_id": "tab1"})
+        first_id = repository.upsert_language(job_id, first)
+        second_id = repository.upsert_language(job_id, second)
+        assert first_id != second_id
+        assert repository.upsert_language(job_id, second) == second_id
+        assert repository.get_table(first_id).native_table_id == "TAB1"
+        assert repository.get_table(second_id).native_table_id == "tab1"
+
+
+def test_numeric_metadata_round_trip_and_sql_observation_guard() -> None:
+    from decimal import Decimal
+
+    from sqlalchemy.exc import IntegrityError
+
+    with owner() as session:
+        ProviderRepository(session).upsert(provider("scb"))
+        job_id = start_job(session)
+        repository = MetadataRepository(session)
+        payload = metadata().model_dump()
+        payload["metadata"]["dataset"]["dimension"]["region"]["category"]["coordinates"] = {
+            "01": [Decimal("18.1234567890123456789"), Decimal("59.0")]
+        }
+        result = MetadataFetchResult.model_validate(payload)
+        repository.upsert_language(job_id, result)
+        restored = repository.get_language("scb-tab1", "sv")
+        assert restored.dataset.dimensions[0].category.coordinates["01"][0] == Decimal(
+            "18.1234567890123456789"
+        )
+        with pytest.raises(IntegrityError), session.begin():
+            session.execute(
+                text(
+                    "UPDATE table_metadata SET dataset = jsonb_set(dataset, '{value}', '[1,2]'::jsonb)"
+                )
+            )
+        assert repository.get_language("scb-tab1", "sv").dataset.to_mapping()["value"] == []

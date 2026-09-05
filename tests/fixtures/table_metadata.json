@@ -1,0 +1,219 @@
+{
+  "provider_id": "scb",
+  "native_table_id": "TAB1",
+  "metadata": {
+    "language": "sv",
+    "catalog": {
+      "label": "Befolkning",
+      "description": "Örebro län",
+      "source": "SCB",
+      "updated": "2025-03-04",
+      "first_period": "2024",
+      "last_period": "2025",
+      "variable_names": [
+        "Region i katalogen"
+      ],
+      "links": [
+        {
+          "rel": "self",
+          "hreflang": "sv",
+          "href": "https://example.test/tables/TAB1"
+        }
+      ],
+      "sort_code": "001",
+      "tags": [
+        "befolkning",
+        "ålder"
+      ],
+      "category": "public",
+      "discontinued": true,
+      "subject_code": "BE",
+      "time_unit": "Annual",
+      "paths": [
+        [
+          {
+            "id": "BE",
+            "label": "Befolkning",
+            "sort_code": "01"
+          }
+        ]
+      ]
+    },
+    "dataset": {
+      "label": "Statistical title: Befolkning",
+      "source": "SCB",
+      "updated": "2025-03-04",
+      "href": "https://example.test/tables/TAB1/metadata",
+      "version": "2.0",
+      "class": "dataset",
+      "note": [
+        "Första noten",
+        "Andra noten"
+      ],
+      "link": {
+        "describedby": [
+          {
+            "extension": {
+              "code": "metadata"
+            }
+          }
+        ],
+        "related": [
+          {
+            "extension": {
+              "relation": "documentation",
+              "metaid": "m1",
+              "category": "quality"
+            },
+            "href": "https://example.test/quality",
+            "label": "Kvalitet",
+            "type": "text/html"
+          }
+        ]
+      },
+      "role": {
+        "geo": [
+          "region"
+        ]
+      },
+      "id": [
+        "region"
+      ],
+      "size": [
+        2
+      ],
+      "dimension": {
+        "region": {
+          "label": "Region",
+          "note": [
+            "Dimensionsnot",
+            "Ytterligare not"
+          ],
+          "link": {
+            "describedby": [
+              {
+                "extension": {
+                  "code": "region"
+                }
+              }
+            ]
+          },
+          "category": {
+            "index": {
+              "SE": 0,
+              "18": 1
+            },
+            "label": {
+              "SE": "Sverige"
+            },
+            "note": {
+              "SE": [
+                "Land",
+                "Totalt"
+              ]
+            },
+            "unit": {
+              "SE": {
+                "base": "personer",
+                "decimals": 0
+              }
+            },
+            "child": {
+              "SE": [
+                "18"
+              ]
+            }
+          },
+          "extension": {
+            "elimination": true,
+            "eliminationValueCode": "SE",
+            "noteMandatory": {
+              "0": true
+            },
+            "categoryNoteMandatory": {
+              "SE": {
+                "0": true
+              }
+            },
+            "refperiod": {
+              "SE": "2025"
+            },
+            "show": "value",
+            "codelists": [
+              {
+                "id": "regions",
+                "label": "Regioner",
+                "type": "Valueset",
+                "links": []
+              }
+            ],
+            "measuringType": {
+              "SE": "Stock"
+            },
+            "priceType": {
+              "SE": "NotApplicable"
+            },
+            "adjustment": {
+              "SE": "None"
+            },
+            "basePeriod": {
+              "SE": "2024"
+            },
+            "alternativeText": {
+              "SE": "Hela Sverige"
+            }
+          }
+        }
+      },
+      "value": [],
+      "extension": {
+        "px": {
+          "infofile": "info",
+          "tableid": "PX-TAB1",
+          "decimals": 0,
+          "official-statistics": true,
+          "aggregallowed": false,
+          "copyright": true,
+          "language": "sv",
+          "contents": "Antal personer",
+          "description": "PX-beskrivning",
+          "descriptiondefault": false,
+          "heading": [
+            "region"
+          ],
+          "stub": [],
+          "matrix": "M1",
+          "subject-code": "BE01",
+          "subject-area": "Demografi",
+          "nextUpdate": "2026-03-04",
+          "survey": "Register",
+          "link": "https://example.test/survey",
+          "updateFrequency": "Årlig"
+        },
+        "contact": [
+          {
+            "raw": "SCB, Statistik",
+            "name": "Statistik",
+            "organization": "SCB",
+            "phone": "+46 1",
+            "mail": "stats@example.test"
+          }
+        ],
+        "noteMandatory": {
+          "0": true,
+          "1": false
+        },
+        "firstPeriod": "2024",
+        "lastPeriod": "2025",
+        "tags": [
+          "befolkning",
+          "ålder"
+        ],
+        "discontinued": true
+      }
+    }
+  },
+  "comparison_marker": {
+    "stamp": "2025-03-04"
+  }
+}

@@ -8,24 +8,34 @@ same entities, and `tests/test_schema.py` fails if a migrated database and the d
 model disagree. There are no packaged `.sql` resources: a schema edit that a query has not
 followed is now a failing test rather than a runtime error.
 
-`dataset` owns canonical/native identity, serving mode, operator controls, worker
-availability, and `retired` (absence after authoritative discovery). `dataset_metadata`
-owns the language-scoped combined metadata, including the publisher's nullable
-`discontinued` flag. Retirement, publisher discontinuation, operator disabling and worker
-availability are distinct states; `search` hides the first two by default and
-`include_discontinued=True` shows both.
+`table_registry` owns canonical/native identity, serving mode, operator controls, worker
+availability, and retirement after authoritative discovery. `table_metadata` owns one
+language's catalog fields and complete metadata-only JSON-stat Dataset in JSONB.
+`table_language_state` owns comparison markers, hashes, successful check/harvest times,
+and outstanding language errors. The state row can exist without a metadata row.
 
-Every normalized metadata field is represented: scalar fields and text arrays are columns;
-typed links, paths, contacts, PX details and extension maps use JSONB; dimensions and
-categories are language-scoped child relations with `index` columns. Neither `id`/`size`
-envelope arrays nor observations are stored. Comparison state, local harvest timestamps and
-the GIN-backed search projection remain language-scoped. Model validation owns nested
-semantic checks; SQL enforces keys, foreign keys, unique indexes, required scalar values,
-enum values and JSON container types.
+There is no alternate-ID table and no separate dimension/category storage. The Dataset
+is the authoritative statistical representation; search is a derived GIN-backed
+projection including catalog, Dataset, dimension, and category labels. Category order
+comes from the Dataset index, never PostgreSQL JSON object order.
 
-The Pydantic models in `nordicintel_core.models` remain the contract. They are not ORM
-mappings, they import no SQLAlchemy, and no ORM instance leaves a repository: every method
-returns a model.
+Metadata, search, and successful comparison state commit in one short transaction.
+Reads load the entire Dataset from one row, preventing mixed-revision structures.
+Models validate JSON-stat and known PxWeb metadata semantics. SQL additionally enforces
+that the stored document is a Dataset with `value: []` and no `status`.
+
+Publisher `discontinued`, discovery retirement, worker failure, and operator disabling
+remain separate. Refreshing a language clears only its own outstanding failure; worker
+writes never overwrite operator controls. The search policy hides retired and publisher-
+discontinued tables by default.
+
+Repository results are application models, never ORM objects. `get_table` supplies
+native routing identity/controls, `get_language` supplies `TableLanguageMetadata`, and
+`upsert_language` accepts `MetadataFetchResult`. JSON serialization at the database
+boundary preserves Decimal metadata as JSON numbers.
+
+The initial migration is rebuilt for this predeployment model. It is a clean initial
+schema, with no compatibility migration from the discarded design.
 
 ## Engines and sessions
 

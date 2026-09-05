@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from .data import Dataset, ExplicitSelection
+from nordicintel_model.jsonstat import JsonStatDataset
+
+from .data import ExplicitSelection
 from .harvest import DiscoveryEntry, DiscoveryResult, DiscoveryScope, LanguageState
-from .metadata import NormalizedTableMetadata
+from .metadata import MetadataFetchResult
 from .provider import ProviderDefinition
 
 
@@ -40,9 +42,11 @@ class NordicIntelAdapter(Protocol):
 
     async def fetch_metadata(
         self, entry: DiscoveryEntry, languages: Sequence[str]
-    ) -> list[NormalizedTableMetadata]: ...
+    ) -> list[MetadataFetchResult]: ...
 
-    async def fetch_data(self, selection: ExplicitSelection) -> Dataset: ...
+    async def fetch_data(
+        self, native_table_id: str, selection: ExplicitSelection
+    ) -> JsonStatDataset: ...
 
 
 @runtime_checkable

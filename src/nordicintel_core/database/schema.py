@@ -16,7 +16,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    ForeignKeyConstraint,
     Identity,
     Index,
     MetaData,
@@ -26,7 +25,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Mirrors PostgreSQL's own default names so generated DDL stays recognisable, and gives
 # autogenerate stable identities to match constraints across revisions.
@@ -84,14 +83,14 @@ class Provider(Base):
     )
 
 
-class Dataset(Base):
+class TableRecord(Base):
     """Canonical identity, operator controls and worker-owned availability.
 
     ``retired`` records absence after an authoritative discovery. It is deliberately
-    distinct from the publisher's ``dataset_metadata.discontinued`` flag.
+    distinct from the publisher's ``table_metadata.discontinued`` flag.
     """
 
-    __tablename__ = "dataset"
+    __tablename__ = "table_registry"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     provider_id: Mapped[str] = mapped_column(ForeignKey("provider.id"))
@@ -121,68 +120,32 @@ class Dataset(Base):
     )
 
 
-class DatasetAlias(Base):
-    __tablename__ = "dataset_alias"
+class TableMetadata(Base):
+    """Catalog fields and one complete metadata-only JSON-stat document."""
 
-    alias: Mapped[str] = mapped_column(Text, primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("dataset.id"))
-    kind: Mapped[str] = mapped_column(Text, server_default=text("'native'"))
-    valid_from: Mapped[datetime] = mapped_column(server_default=func.now())
-    valid_to: Mapped[datetime | None] = mapped_column()
+    __tablename__ = "table_metadata"
 
-    __table_args__ = (
-        CheckConstraint("length(alias) > 0 AND position('/' in alias) = 0", name="alias"),
-        CheckConstraint("valid_to IS NULL OR valid_to >= valid_from", name="validity"),
-    )
-
-
-class DatasetMetadata(Base):
-    """One language's combined Table and Dataset metadata.
-
-    Compound typed values are JSONB; ordered dimensions and categories are child
-    relations. No observations and no redundant JSON-stat envelope fields are stored.
-    """
-
-    __tablename__ = "dataset_metadata"
-
-    dataset_id: Mapped[str] = mapped_column(
-        ForeignKey("dataset.id", ondelete="CASCADE"), primary_key=True
+    table_id: Mapped[str] = mapped_column(
+        ForeignKey("table_registry.id", ondelete="CASCADE"), primary_key=True
     )
     language: Mapped[str] = mapped_column(Text, primary_key=True)
     label: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
-    sort_code: Mapped[str | None] = mapped_column(Text)
-    tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    source: Mapped[str | None] = mapped_column(Text)
     updated: Mapped[str] = mapped_column(Text)
     first_period: Mapped[str] = mapped_column(Text)
     last_period: Mapped[str] = mapped_column(Text)
     variable_names: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    links: Mapped[list[Any]] = mapped_column(_JSONB)
+    sort_code: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     category: Mapped[str | None] = mapped_column(Text)
     discontinued: Mapped[bool | None] = mapped_column()
-    source: Mapped[str | None] = mapped_column(Text)
     subject_code: Mapped[str | None] = mapped_column(Text)
     time_unit: Mapped[str | None] = mapped_column(Text)
     paths: Mapped[list[Any] | None] = mapped_column(_JSONB)
-    links: Mapped[list[Any]] = mapped_column(_JSONB)
-    href: Mapped[str | None] = mapped_column(Text)
-    link: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-    notes: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    roles: Mapped[dict[str, Any]] = mapped_column(_JSONB, server_default=text("'{}'::jsonb"))
-    note_mandatory: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-    px: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-    contacts: Mapped[list[Any] | None] = mapped_column(_JSONB)
-    comparison_marker: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-    content_hash: Mapped[str | None] = mapped_column(Text)
-    last_checked_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    last_harvested_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    dataset: Mapped[dict[str, Any]] = mapped_column(_JSONB)
     search_document: Mapped[Any] = mapped_column(TSVECTOR, server_default=text("''::tsvector"))
-
-    dimensions: Mapped[list[Dimension]] = relationship(
-        back_populates="dataset_metadata",
-        order_by="Dimension.index",
-        lazy="raise_on_sql",
-        viewonly=True,
-    )
 
     __table_args__ = (
         CheckConstraint(
@@ -200,84 +163,42 @@ class DatasetMetadata(Base):
         ),
         CheckConstraint(_nullable_jsonb("paths", "array"), name="paths"),
         CheckConstraint("jsonb_typeof(links) = 'array'", name="links"),
-        CheckConstraint(_nullable_jsonb("link"), name="link"),
         CheckConstraint(
-            f"{_jsonb_object('roles')} "
-            "AND roles - ARRAY['time', 'geo', 'metric'] = '{}'::jsonb",
-            name="roles",
+            "jsonb_typeof(dataset) = 'object' AND "
+            "dataset ?& ARRAY['version','class','id','size','dimension','value'] AND "
+            "dataset->>'version' = '2.0' AND "
+            "dataset->>'class' = 'dataset' AND "
+            "dataset->'value' = '[]'::jsonb AND "
+            "NOT dataset ? 'status' AND "
+            "jsonb_typeof(dataset->'id') = 'array' AND "
+            "jsonb_typeof(dataset->'size') = 'array' AND "
+            "jsonb_typeof(dataset->'dimension') = 'object'",
+            name="metadata_dataset",
         ),
-        CheckConstraint(_nullable_jsonb("note_mandatory"), name="note_mandatory"),
-        CheckConstraint(_nullable_jsonb("px"), name="px"),
-        CheckConstraint(_nullable_jsonb("contacts", "array"), name="contacts"),
+        Index("table_metadata_search_idx", "search_document", postgresql_using="gin"),
+    )
+
+
+class TableLanguageState(Base):
+    """Comparison state exists even when a language has never harvested successfully."""
+
+    __tablename__ = "table_language_state"
+    table_id: Mapped[str] = mapped_column(
+        ForeignKey("table_registry.id", ondelete="CASCADE"), primary_key=True
+    )
+    language: Mapped[str] = mapped_column(Text, primary_key=True)
+    comparison_marker: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
+    content_hash: Mapped[str | None] = mapped_column(Text)
+    last_checked_at: Mapped[datetime | None] = mapped_column()
+    last_harvested_at: Mapped[datetime | None] = mapped_column()
+    last_error: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(language) > 0 AND language = lower(btrim(language))", name="language"
+        ),
         CheckConstraint(_nullable_jsonb("comparison_marker"), name="comparison_marker"),
-        Index(
-            "dataset_metadata_search_idx",
-            "search_document",
-            postgresql_using="gin",
-        ),
-    )
-
-
-class Dimension(Base):
-    __tablename__ = "dimension"
-
-    dataset_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    language: Mapped[str] = mapped_column(Text, primary_key=True)
-    code: Mapped[str] = mapped_column(Text, primary_key=True)
-    index: Mapped[int] = mapped_column()
-    label: Mapped[str | None] = mapped_column(Text)
-    notes: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    extension: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-    link: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-
-    dataset_metadata: Mapped[DatasetMetadata] = relationship(
-        back_populates="dimensions", lazy="raise_on_sql", viewonly=True
-    )
-    categories: Mapped[list[Category]] = relationship(
-        back_populates="dimension",
-        order_by="Category.index",
-        lazy="raise_on_sql",
-        viewonly=True,
-    )
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["dataset_id", "language"],
-            ["dataset_metadata.dataset_id", "dataset_metadata.language"],
-            ondelete="CASCADE",
-        ),
-        UniqueConstraint("dataset_id", "language", "index"),
-        CheckConstraint("length(btrim(code)) > 0", name="code"),
-        CheckConstraint("index >= 0", name="index"),
-    )
-
-
-class Category(Base):
-    __tablename__ = "category"
-
-    dataset_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    language: Mapped[str] = mapped_column(Text, primary_key=True)
-    dimension_code: Mapped[str] = mapped_column(Text, primary_key=True)
-    code: Mapped[str] = mapped_column(Text, primary_key=True)
-    index: Mapped[int] = mapped_column()
-    label: Mapped[str | None] = mapped_column(Text)
-    notes: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    child: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    unit: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
-
-    dimension: Mapped[Dimension] = relationship(
-        back_populates="categories", lazy="raise_on_sql", viewonly=True
-    )
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["dataset_id", "language", "dimension_code"],
-            ["dimension.dataset_id", "dimension.language", "dimension.code"],
-            ondelete="CASCADE",
-        ),
-        UniqueConstraint("dataset_id", "language", "dimension_code", "index"),
-        CheckConstraint("length(btrim(code)) > 0", name="code"),
-        CheckConstraint("index >= 0", name="index"),
+        CheckConstraint(_nullable_jsonb("last_error"), name="last_error"),
     )
 
 
@@ -384,7 +305,7 @@ class HarvestItem(Base):
         BigInteger, ForeignKey("harvest_job.id", ondelete="CASCADE")
     )
     source_table_id: Mapped[str] = mapped_column(Text)
-    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("dataset.id"))
+    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("table_registry.id"))
     status: Mapped[str] = mapped_column(Text, server_default=text("'running'"))
     started_at: Mapped[datetime] = mapped_column(server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column()
@@ -393,9 +314,7 @@ class HarvestItem(Base):
     __table_args__ = (
         UniqueConstraint("job_id", "source_table_id"),
         CheckConstraint("length(source_table_id) > 0", name="source_table_id"),
-        CheckConstraint(
-            "status IN ('running', 'updated', 'skipped', 'failed')", name="status"
-        ),
+        CheckConstraint("status IN ('running', 'updated', 'skipped', 'failed')", name="status"),
         CheckConstraint("status = 'running' OR finished_at IS NOT NULL", name="terminal_state"),
         CheckConstraint("status <> 'failed' OR error IS NOT NULL", name="failure_error"),
         CheckConstraint(_nullable_jsonb("error"), name="error"),

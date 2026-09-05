@@ -8,10 +8,20 @@ jobs:
   quality:
     strategy:
       matrix:
-        python-version: ["3.11", "3.14"]
+        python-version: ["3.12", "3.14"]
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nordicintel-core
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nordicintel-core
+      - uses: actions/checkout@v4
+        with:
+          repository: nordicintel/nordicintel-model
+          path: nordicintel-model
+          token: ${{ secrets.NORDICINTEL_READ_TOKEN || github.token }}
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
@@ -23,6 +33,9 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nordicintel-core
     services:
       postgres:
         image: postgres:17-alpine
@@ -41,9 +54,16 @@ jobs:
       NORDICINTEL_TEST_DATABASE_URL: postgresql://postgres:nordicintel_test@localhost:5432/nordicintel
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: nordicintel-core
+      - uses: actions/checkout@v4
+        with:
+          repository: nordicintel/nordicintel-model
+          path: nordicintel-model
+          token: ${{ secrets.NORDICINTEL_READ_TOKEN || github.token }}
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - run: uv sync --all-extras --dev --locked
       - run: uv run python -m nordicintel_core.database migrate upgrade
       - run: uv run pytest -m postgres

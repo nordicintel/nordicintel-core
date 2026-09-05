@@ -1,63 +1,53 @@
 # Adapter integration
 
-An adapter package implements `AdapterFactory` and `NordicIntelAdapter` from
-`nordicintel_core.models`. The host resolves secret references, owns an `httpx.AsyncClient`, wraps it
-in `nordicintel_core.http.HttpClient`, and injects both configuration and HTTP access into the
-factory.
+Adapters implement `AdapterFactory` and `NordicIntelAdapter`. Hosts resolve secrets,
+initialize the shared HTTP client, and pass configuration and HTTP access to the factory.
+Adapters never receive a database connection.
 
-Adapters own provider-specific URLs, authentication, discovery, request construction, response
-parsing, and comparison-marker semantics. They return normalized core models and never receive a
-database connection. Live-data requests always contain explicit category codes; expression parsing
-and selection expansion happen before adapter dispatch.
+## Metadata
 
-## Metadata contract
+`fetch_metadata(entry, languages)` returns `list[MetadataFetchResult]`. Each result has
+`provider_id`, exact `native_table_id`, `metadata: LanguageMetadata`, and an optional
+opaque `comparison_marker`. Core mints/resolves the canonical Table ID during acceptance.
 
-`NormalizedTableMetadata` contains the combined information from PxWebApi2's
-`TableResponse` (`GET tables/{id}`) and `Dataset` (`GET tables/{id}/metadata`). It is
-not a subset chosen to suit the database. Names are normalized to snake_case; API
-response serialization remains the API's responsibility.
+`LanguageMetadata` has `language`, `catalog: TableCatalogMetadata`, and
+`dataset: nordicintel_model.jsonstat.JsonStatDataset`. Construct it from typed objects
+or a JSON-stat mapping. The Dataset preserves the JSON-stat/PxWeb wire structure,
+including relation-keyed links, roles, category order, units, notes, and extensions.
+Metadata acceptance requires an empty dense `value` array and no observation status.
 
-| Upstream information | Normalized location |
-| --- | --- |
-| Table `id` | `native_table_id`; `table_id` is the NordicIntel canonical identity |
-| Table `language`, `label`, `description`, `sortCode`, `tags`, `updated` | `language`, `label`, `description`, `sort_code`, `tags`, `updated` |
-| Table `firstPeriod`, `lastPeriod`, `category`, `variableNames`, `discontinued` | `first_period`, `last_period`, `category`, `variable_names`, `discontinued` |
-| Table `source`, `subjectCode`, `timeUnit`, `paths`, `links` | `source`, `subject_code`, `time_unit`, typed `paths` and `links` |
-| Dataset `label`, `source`, `updated` | Shared `label`, `source`, `updated` |
-| Dataset `href`, `link`, `note`, `role`, `dimension` | `href`, typed `link`, `notes`, `roles`, ordered `dimensions` |
-| Dataset `extension.firstPeriod`, `lastPeriod`, `tags`, `discontinued` | Shared `first_period`, `last_period`, `tags`, `discontinued` |
-| Dataset `extension.noteMandatory`, `contact`, `px` | `note_mandatory`, typed `contacts`, typed `px` |
-| Dataset `id`, `size` | Derived from ordered dimension codes and category counts; no stored fields |
-| Dataset `version`, `class` | Wire constants `2.0`, `dataset`; no stored fields |
-| Dataset `value`, `status` | Live `Dataset` only; never harvested or persisted |
+Catalog fields describe the Table response. They remain distinct from similarly named
+Dataset fields: differing titles or source descriptions are retained. Adapters should
+diagnose inconsistencies and use provider-specific consistency checks when independently
+fetched responses may span an upstream update. Never replace publisher update times
+with local timestamps or silently mix incompatible structures.
 
-Dimension/category `index` is zero-based and contiguous; lists must arrive in index
-order. Category labels may be absent. Notes remain arrays at all three levels.
-Category `child` preserves hierarchy, and `unit` has typed `base` and `decimals`.
-Dimension `link` and every field of `ExtensionDimension` are retained in typed
-objects, including elimination, mandatory notes, reference/base periods,
-measurement/price/adjustment types, alternative text, and codelist references.
-References do not implement codelist storage or endpoints.
+Language representations are complete and independent. Core commits a language's
+catalog, Dataset, search projection, and successful comparison marker together. The
+marker describes accepted metadata, not a merely attempted fetch. Failed languages
+retain their previous metadata and are represented in `LanguageState`, including a
+language whose first fetch has failed.
 
-The complete `extension.px` information is retained separately, including its native
-table identifier, language, contents, description, placement, publication flags,
-subject details, next update, survey and update frequency. These are not assumed to
-equal similarly named catalogue fields. `variable_names` is likewise retained:
-the upstream schema does not guarantee equality with dimension labels.
+## Live data
 
-Adapters reconcile shared Table/Dataset attributes before constructing the combined
-model. Conflicting non-null values must be treated as a normalization error rather
-than silently discarding one. `updated` retains the upstream string: the supplied
-specification inconsistently declares a date-only pattern and a date-time format.
-It must not be substituted with a local harvest timestamp.
+`fetch_data(native_table_id, selection)` returns the same `JsonStatDataset` type with
+selected dimensions/categories, values, and optional status. The API obtains native
+routing identity from `MetadataRepository.get_table(table_id)`. Selection expansion
+and preflight happen before dispatch. Preserve the live Dataset's observation order;
+never attach selected values positionally to the full harvested structure.
 
-`fetch_data` returns `Dataset`, with the same Dataset metadata and a `value` array.
-`status` is optional and sparse, keyed by zero-based cell index. A metadata Dataset
-has an empty `value` array; it does not need fabricated observations or statuses.
-There is no separate cube abstraction or redundant `id`/`size` input contract.
+Use `nordicintel_model.dumps` to serialize Dataset responses, preserving numeric values.
+PxWeb extension interpretation and selection-aware enrichment live in model's `pxweb`
+package. Enrichment filters category-keyed extension maps and preserves note/flag
+association. Retaining codelist or elimination metadata does not implement aggregation.
 
-`DiscoveryResult.authoritative` may be true only when its provider-wide scope was completely
-enumerated. Core rejects absence-based retirement for incomplete or single-table discovery.
+## Discovery and HTTP
 
-HTTP retries are opt-in per operation. An adapter may mark a GET or a read-only POST as
-`retry_safe=True`; mutating or ambiguous operations must keep the default.
+Adapters own upstream discovery, URL/query construction, authentication, native parsing,
+and marker semantics. A publication timestamp is a safe skip marker only if the adapter
+knows it covers relevant metadata changes.
+
+`DiscoveryResult.authoritative` can be true only after the complete provider scope was
+enumerated. Incomplete/single-table discovery must not retire unseen tables.
+
+Retries are opt-in through `retry_safe=True` for operations known to be safe to repeat.

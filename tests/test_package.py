@@ -29,13 +29,13 @@ def test_models_import_without_sqlalchemy() -> None:
         "import sys;"
         "sys.modules['sqlalchemy'] = None;"
         "import nordicintel_core.models as m;"
-        "print(m.NormalizedTableMetadata.__name__)"
+        "print(m.TableLanguageMetadata.__name__)"
     )
     result = subprocess.run(
         [sys.executable, "-c", program], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "NormalizedTableMetadata"
+    assert result.stdout.strip() == "TableLanguageMetadata"
 
 
 def test_import_does_not_read_database_environment() -> None:

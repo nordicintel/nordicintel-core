@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
 from alembic import command
@@ -21,24 +20,8 @@ from test_models import rich_metadata
 
 from nordicintel_core.database import create_owner_engine
 from nordicintel_core.database.migration_cli import _configuration
-from nordicintel_core.database.schema import (
-    Base,
-    Category,
-    DatasetMetadata,
-    Dimension,
-)
-from nordicintel_core.models import Category as CategoryModel
-from nordicintel_core.models import Dimension as DimensionModel
-from nordicintel_core.models import NormalizedTableMetadata
-
-IDENTITY_FIELDS = {"provider_id", "table_id", "native_table_id", "aliases", "dimensions"}
-PERSISTENCE_COLUMNS = {
-    "dataset_id",
-    "content_hash",
-    "last_checked_at",
-    "last_harvested_at",
-    "search_document",
-}
+from nordicintel_core.database.schema import Base
+from nordicintel_core.models import TableCatalogMetadata
 
 
 def columns(table: str) -> set[str]:
@@ -46,23 +29,23 @@ def columns(table: str) -> set[str]:
 
 
 def test_definitions_cover_the_models() -> None:
-    """Every model field has a column and every column has a field, with no database."""
-    assert (
-        columns("dataset_metadata")
-        == (set(NormalizedTableMetadata.model_fields) - IDENTITY_FIELDS) | PERSISTENCE_COLUMNS
-    )
-    assert columns("dimension") == (set(DimensionModel.model_fields) - {"categories"}) | {
-        "dataset_id",
+    assert columns("table_metadata") == set(TableCatalogMetadata.model_fields) | {
+        "table_id",
         "language",
+        "dataset",
+        "search_document",
     }
-    assert columns("category") == set(CategoryModel.model_fields) | {
-        "dataset_id",
-        "language",
-        "dimension_code",
+    assert set(Base.metadata.tables) == {
+        "provider",
+        "table_registry",
+        "table_metadata",
+        "table_language_state",
+        "harvest_schedule",
+        "harvest_job",
+        "harvest_item",
     }
-    assert "retired" in columns("dataset")
-    assert "discontinued" not in columns("dataset")
-    assert not {"value", "status", "size", "ordinal"} & columns("dataset_metadata")
+    assert "retired" in columns("table_registry")
+    assert "discontinued" not in columns("table_registry")
 
 
 def test_every_check_constraint_is_named() -> None:
@@ -135,88 +118,37 @@ def test_named_check_constraints_reach_the_database(migrated: Connection) -> Non
 
 @pytest.mark.postgres
 def test_declared_indexes_reach_the_database(migrated: Connection) -> None:
-    expected = {
-        index.name for table in Base.metadata.tables.values() for index in table.indexes
-    }
+    expected = {index.name for table in Base.metadata.tables.values() for index in table.indexes}
     actual = set(
-        migrated.scalars(
-            text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
-        )
+        migrated.scalars(text("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"))
     )
     assert expected <= actual
 
 
 @pytest.mark.postgres
 def test_complete_metadata_storage(migrated: Connection) -> None:
-    """Every field of the richest possible metadata survives a round trip."""
-    metadata = rich_metadata()
-    session = Session(bind=migrated)
-    session.execute(
-        text("INSERT INTO provider (id, label, adapter_type) VALUES ('scb', 'SCB', 'pxweb')")
-    )
-    session.execute(
-        text(
-            "INSERT INTO dataset (id, provider_id, native_table_id, operator_disabled) "
-            "VALUES ('scb-tab1', 'scb', 'TAB1', true)"
-        )
-    )
-    payload = metadata.model_dump(mode="json")
-    root = {key: value for key, value in payload.items() if key not in IDENTITY_FIELDS}
-    session.execute(
-        DatasetMetadata.__table__.insert().values(dataset_id=metadata.table_id, **root)
-    )
-    for dimension in payload["dimensions"]:
-        values = {key: value for key, value in dimension.items() if key != "categories"}
-        session.execute(
-            Dimension.__table__.insert().values(
-                dataset_id=metadata.table_id, language=metadata.language, **values
-            )
-        )
-        for category in dimension["categories"]:
-            session.execute(
-                Category.__table__.insert().values(
-                    dataset_id=metadata.table_id,
-                    language=metadata.language,
-                    dimension_code=dimension["code"],
-                    **category,
-                )
-            )
+    from nordicintel_core.database import HarvestRepository, MetadataRepository, ProviderRepository
+    from nordicintel_core.models import HarvestRequest, ProviderDefinition
 
-    restored = session.execute(DatasetMetadata.__table__.select()).mappings().one()
-    assert {key: restored[key] for key in root} == root
-    dimensions: list[dict[str, Any]] = []
-    stored_dimensions = session.execute(
-        Dimension.__table__.select().order_by(Dimension.index)
-    ).mappings()
-    for row in stored_dimensions:
-        values = {
-            key: value
-            for key, value in row.items()
-            if key not in {"dataset_id", "language"}
-        }
-        categories = session.execute(
-            Category.__table__.select()
-            .where(Category.dimension_code == row["code"])
-            .order_by(Category.index)
-        ).mappings()
-        values["categories"] = [
-            {
-                key: value
-                for key, value in category.items()
-                if key not in {"dataset_id", "language", "dimension_code"}
-            }
-            for category in categories
-        ]
-        dimensions.append(values)
-    assert (
-        NormalizedTableMetadata.model_validate(
-            {**payload, **{key: restored[key] for key in root}, "dimensions": dimensions}
-        )
-        == metadata
+    session = Session(bind=migrated)
+    ProviderRepository(session).upsert(
+        ProviderDefinition(id="scb", label="SCB", adapter_type="pxweb")
     )
-    assert session.execute(
-        text("SELECT retired, operator_disabled FROM dataset")
-    ).mappings().one() == {"retired": False, "operator_disabled": True}
+    queue = HarvestRepository(session)
+    queue.enqueue("scb", HarvestRequest())
+    job = queue.claim()
+    assert job is not None
+    metadata = rich_metadata()
+    repository = MetadataRepository(session)
+    table_id = repository.upsert_language(job.id, metadata)
+    restored = repository.get_language(table_id, "sv")
+    assert restored is not None
+    assert restored.dataset.to_mapping() == metadata.metadata.dataset.to_mapping()
+    assert restored.catalog == metadata.metadata.catalog
+    assert (
+        repository.load_language_state(table_id)["sv"].comparison_marker
+        == metadata.comparison_marker
+    )
 
 
 @pytest.mark.postgres

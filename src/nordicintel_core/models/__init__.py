@@ -1,7 +1,9 @@
 """Public model and protocol contracts."""
 
+from nordicintel_model.jsonstat import JsonStatDataset
+
 from .adapters import AdapterFactory, AsyncHttpClient, NordicIntelAdapter
-from .data import Dataset, DimensionSelection, ExplicitSelection
+from .data import DimensionSelection, ExplicitSelection
 from .harvest import (
     Diagnostic,
     DiagnosticStage,
@@ -20,51 +22,24 @@ from .harvest import (
 )
 from .metadata import (
     AvailabilityStatus,
-    Category,
-    DatasetMetadata,
-    Dimension,
-    NormalizedTableMetadata,
+    LanguageMetadata,
+    MetadataFetchResult,
     ServingMode,
+    TableCatalogMetadata,
+    TableLanguageMetadata,
+    TableRecord,
     TableSearchResult,
     deterministic_hash,
 )
 from .provider import ProviderDefinition
-from .statistical import (
-    Adjustment,
-    CodelistInformation,
-    Contact,
-    DatasetLinks,
-    DescribedByLink,
-    DimensionExtension,
-    Link,
-    MeasuringType,
-    PathElement,
-    PriceType,
-    PxMetadata,
-    RelatedLink,
-    RelatedLinkExtension,
-    Role,
-    TableCategory,
-    TimeUnit,
-    Unit,
-)
+from .statistical import Link, PathElement, TableCategory, TimeUnit
 
 __all__ = [
     "AdapterFactory",
-    "Adjustment",
     "AsyncHttpClient",
     "AvailabilityStatus",
-    "Category",
-    "CodelistInformation",
-    "Contact",
-    "Dataset",
-    "DatasetLinks",
-    "DatasetMetadata",
-    "DescribedByLink",
     "Diagnostic",
     "DiagnosticStage",
-    "Dimension",
-    "DimensionExtension",
     "DimensionSelection",
     "DiscoveryEntry",
     "DiscoveryResult",
@@ -77,23 +52,21 @@ __all__ = [
     "ItemStatus",
     "JobStatus",
     "JobTrigger",
+    "JsonStatDataset",
+    "LanguageMetadata",
     "LanguageState",
     "Link",
-    "MeasuringType",
+    "MetadataFetchResult",
     "NordicIntelAdapter",
-    "NormalizedTableMetadata",
     "PathElement",
-    "PriceType",
     "ProviderDefinition",
-    "PxMetadata",
     "QueueCount",
-    "RelatedLink",
-    "RelatedLinkExtension",
-    "Role",
     "ServingMode",
+    "TableCatalogMetadata",
     "TableCategory",
+    "TableLanguageMetadata",
+    "TableRecord",
     "TableSearchResult",
     "TimeUnit",
-    "Unit",
     "deterministic_hash",
 ]

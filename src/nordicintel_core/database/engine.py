@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import partial
+
+import simplejson
 
 try:
     from sqlalchemy import Engine, create_engine, func, select
@@ -32,6 +35,10 @@ def normalize_url(database_url: str) -> str:
 
 def create_api_engine(database_url: str, **kwargs: object) -> Engine:
     """Build a pooled engine for short, independent request-scoped transactions."""
+    kwargs.setdefault(
+        "json_serializer", partial(simplejson.dumps, use_decimal=True, allow_nan=False)
+    )
+    kwargs.setdefault("json_deserializer", partial(simplejson.loads, use_decimal=True))
     return create_engine(normalize_url(database_url), pool_pre_ping=True, **kwargs)
 
 
@@ -41,6 +48,10 @@ def create_owner_engine(database_url: str, **kwargs: object) -> Engine:
     Never add pre-ping or recycling here: both may replace the backend that holds the
     provider advisory lock and matches ``harvest_job.owner_backend_pid``.
     """
+    kwargs.setdefault(
+        "json_serializer", partial(simplejson.dumps, use_decimal=True, allow_nan=False)
+    )
+    kwargs.setdefault("json_deserializer", partial(simplejson.loads, use_decimal=True))
     return create_engine(normalize_url(database_url), poolclass=NullPool, **kwargs)
 
 

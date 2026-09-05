@@ -24,9 +24,7 @@ def _configuration(database_url: str) -> Config:
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
     config = Config()
-    config.set_main_option(
-        "script_location", str(Path(__file__).with_name("migrations"))
-    )
+    config.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
