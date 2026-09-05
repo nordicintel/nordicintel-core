@@ -72,7 +72,7 @@ class DiscoveryResult(CoreModel):
     authoritative: bool
 
     @model_validator(mode="after")
-    def validate_unique_entries(self) -> "DiscoveryResult":
+    def validate_unique_entries(self) -> DiscoveryResult:
         ids = [entry.source_table_id for entry in self.entries]
         if len(ids) != len(set(ids)):
             raise ValueError("discovery source_table_id values must be unique")
@@ -119,3 +119,11 @@ class HarvestItem(CoreModel):
     started_at: datetime
     finished_at: datetime | None = None
     error: Diagnostic | None = None
+
+
+class HarvestSchedule(CoreModel):
+    provider_id: str
+    enabled: bool
+    every_seconds: int = Field(gt=0)
+    next_run_at: datetime
+    request: HarvestRequest

@@ -94,7 +94,7 @@ class HttpClient:
             self._policy.max_delay_seconds,
             self._policy.base_delay_seconds * (2 ** (attempt - 1)),
         )
-        return ceiling * self._random()
+        return float(ceiling * self._random())
 
     async def request(
         self,

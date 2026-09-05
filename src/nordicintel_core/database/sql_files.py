@@ -1,8 +1,8 @@
 """Safe access to packaged, immutable SQL text."""
 
+import re
 from functools import lru_cache
 from importlib.resources import files
-import re
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*\.sql$")
 

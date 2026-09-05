@@ -8,7 +8,7 @@ import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from ._base import CoreModel
 
@@ -41,7 +41,7 @@ class Dimension(CoreModel):
     categories: list[Category] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_categories(self) -> "Dimension":
+    def validate_categories(self) -> Dimension:
         codes = [category.code for category in self.categories]
         ordinals = [category.ordinal for category in self.categories]
         if len(codes) != len(set(codes)):
@@ -70,14 +70,18 @@ class NormalizedTableMetadata(CoreModel):
     comparison_marker: dict[str, Any] | None = None
     aliases: list[str] = Field(default_factory=list)
 
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("language must not be blank")
+        return normalized
+
     @model_validator(mode="after")
-    def validate_structure(self) -> "NormalizedTableMetadata":
+    def validate_structure(self) -> NormalizedTableMetadata:
         if not CANONICAL_ID_PATTERN.fullmatch(self.table_id):
             raise ValueError("table_id must be a canonical table slug")
-        language = self.language.strip().lower()
-        if not language:
-            raise ValueError("language must not be blank")
-        self.language = language
         codes = [dimension.code for dimension in self.dimensions]
         ordinals = [dimension.ordinal for dimension in self.dimensions]
         if len(codes) != len(set(codes)):
@@ -88,6 +92,9 @@ class NormalizedTableMetadata(CoreModel):
         invalid = {code for values in self.roles.values() for code in values} - known
         if invalid:
             raise ValueError(f"role references unknown dimensions: {sorted(invalid)}")
+        role_members = [code for values in self.roles.values() for code in values]
+        if len(role_members) != len(set(role_members)):
+            raise ValueError("a dimension cannot belong to more than one role")
         if len(self.aliases) != len(set(self.aliases)):
             raise ValueError("aliases must be unique")
         return self

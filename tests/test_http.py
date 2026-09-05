@@ -1,11 +1,8 @@
-from collections.abc import Awaitable
-from typing import Any
-
 import httpx
 import pytest
 
 from nordicintel_core.errors import UpstreamResponseError
-from nordicintel_core.http import HttpClient, RetryPolicy
+from nordicintel_core.http import HttpClient
 
 
 class Clock:

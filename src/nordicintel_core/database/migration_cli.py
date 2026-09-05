@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 
 
 def _configuration(database_url: str):  # type: ignore[no-untyped-def]
