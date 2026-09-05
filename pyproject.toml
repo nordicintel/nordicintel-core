@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nordicintel-core"
+version = "0.1.0"
+description = "Shared contracts and infrastructure for NordicIntel"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "NordicIntel" }]
+dependencies = ["pydantic>=2.10,<3"]
+
+[project.optional-dependencies]
+http = ["httpx>=0.27,<1"]
+db = ["psycopg[binary]>=3.2,<4"]
+migrations = [
+  "alembic>=1.14,<2",
+  "psycopg[binary]>=3.2,<4",
+  "sqlalchemy>=2.0,<3",
+]
+all = [
+  "alembic>=1.14,<2",
+  "httpx>=0.27,<1",
+  "psycopg[binary]>=3.2,<4",
+  "sqlalchemy>=2.0,<3",
+]
+
+[dependency-groups]
+dev = [
+  "build>=1.2,<2",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "ruff>=0.9,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nordicintel_core"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "CONTEXT.md", "docs/adr", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["postgres: requires NORDICINTEL_TEST_DATABASE_URL"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["nordicintel_core"]
+
+[tool.uv]
+default-groups = ["dev"]

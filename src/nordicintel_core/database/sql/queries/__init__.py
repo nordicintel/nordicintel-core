@@ -1,0 +1,1 @@
+"""Parameterized application query resources."""
