@@ -304,20 +304,20 @@ class HarvestItem(Base):
     job_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("harvest_job.id", ondelete="CASCADE")
     )
-    source_table_id: Mapped[str] = mapped_column(Text)
-    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("table_registry.id"))
+    native_table_id: Mapped[str] = mapped_column(Text)
+    table_id: Mapped[str | None] = mapped_column(ForeignKey("table_registry.id"))
     status: Mapped[str] = mapped_column(Text, server_default=text("'running'"))
     started_at: Mapped[datetime] = mapped_column(server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column()
     error: Mapped[dict[str, Any] | None] = mapped_column(_JSONB)
 
     __table_args__ = (
-        UniqueConstraint("job_id", "source_table_id"),
-        CheckConstraint("length(source_table_id) > 0", name="source_table_id"),
+        UniqueConstraint("job_id", "native_table_id"),
+        CheckConstraint("length(native_table_id) > 0", name="native_table_id"),
         CheckConstraint("status IN ('running', 'updated', 'skipped', 'failed')", name="status"),
         CheckConstraint("status = 'running' OR finished_at IS NOT NULL", name="terminal_state"),
         CheckConstraint("status <> 'failed' OR error IS NOT NULL", name="failure_error"),
         CheckConstraint(_nullable_jsonb("error"), name="error"),
         Index("harvest_item_job_idx", "job_id", "status", "id"),
-        Index("harvest_item_dataset_idx", "dataset_id", text("started_at DESC")),
+        Index("harvest_item_table_idx", "table_id", text("started_at DESC")),
     )

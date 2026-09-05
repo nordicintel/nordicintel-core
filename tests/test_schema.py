@@ -46,6 +46,16 @@ def test_definitions_cover_the_models() -> None:
     }
     assert "retired" in columns("table_registry")
     assert "discontinued" not in columns("table_registry")
+    assert columns("harvest_item") == {
+        "id",
+        "job_id",
+        "native_table_id",
+        "table_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "error",
+    }
 
 
 def test_every_check_constraint_is_named() -> None:

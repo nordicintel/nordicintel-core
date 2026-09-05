@@ -128,6 +128,6 @@ def test_unicode_hash_is_deterministic() -> None:
 
 
 def test_discovery_rejects_duplicate_source_ids() -> None:
-    entry = DiscoveryEntry(source_table_id="TAB1")
+    entry = DiscoveryEntry(native_table_id="TAB1")
     with pytest.raises(ValidationError, match="must be unique"):
         DiscoveryResult(scope={"languages": ["sv"]}, entries=[entry, entry], authoritative=True)

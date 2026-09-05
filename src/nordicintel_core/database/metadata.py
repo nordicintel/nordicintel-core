@@ -396,7 +396,7 @@ class MetadataRepository:
         """Retire tables absent from a complete inventory. Never call it after a partial one."""
         if not discovery.authoritative or discovery.scope.table_id is not None:
             raise ValueError("absence-based retirement requires authoritative discovery")
-        seen = [entry.source_table_id for entry in discovery.entries]
+        seen = [entry.native_table_id for entry in discovery.entries]
         with self.session.begin():
             self._assert_owner(job_id, provider_id)
             return list(

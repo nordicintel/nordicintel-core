@@ -85,7 +85,7 @@ class DiscoveryScope(CoreModel):
 
 
 class DiscoveryEntry(CoreModel):
-    source_table_id: str = Field(min_length=1)
+    native_table_id: str = Field(min_length=1)
     available_languages: list[str] | None = None
     marker: dict[str, Any] | None = None
     fetch_parameters: dict[str, Any] = Field(default_factory=dict)
@@ -108,9 +108,9 @@ class DiscoveryResult(CoreModel):
 
     @model_validator(mode="after")
     def validate_unique_entries(self) -> DiscoveryResult:
-        ids = [entry.source_table_id for entry in self.entries]
+        ids = [entry.native_table_id for entry in self.entries]
         if len(ids) != len(set(ids)):
-            raise ValueError("discovery source_table_id values must be unique")
+            raise ValueError("discovery native_table_id values must be unique")
         return self
 
 
@@ -164,7 +164,7 @@ class HarvestJob(CoreModel):
 class HarvestItem(CoreModel):
     id: int
     job_id: int
-    source_table_id: str
+    native_table_id: str
     table_id: str | None = None
     status: ItemStatus
     started_at: datetime

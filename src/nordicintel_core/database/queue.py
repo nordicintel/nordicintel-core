@@ -82,8 +82,8 @@ def _item(row: ItemRow) -> HarvestItem:
     return HarvestItem(
         id=row.id,
         job_id=row.job_id,
-        source_table_id=row.source_table_id,
-        table_id=row.dataset_id,
+        native_table_id=row.native_table_id,
+        table_id=row.table_id,
         status=ItemStatus(row.status),
         started_at=row.started_at,
         finished_at=row.finished_at,
@@ -315,15 +315,15 @@ class HarvestRepository:
             return _job(current)
 
     def begin_item(
-        self, job_id: int, source_table_id: str, *, table_id: str | None = None
+        self, job_id: int, native_table_id: str, *, table_id: str | None = None
     ) -> HarvestItem:
-        if not source_table_id.strip():
-            raise ValueError("source_table_id must not be blank")
+        if not native_table_id.strip():
+            raise ValueError("native_table_id must not be blank")
         source = (
             select(
                 literal(job_id),
-                literal(source_table_id),
-                literal(table_id, type_=ItemRow.dataset_id.type),
+                literal(native_table_id),
+                literal(table_id, type_=ItemRow.table_id.type),
             )
             .select_from(JobRow)
             .where(_owned(job_id), _table_belongs_to_job(table_id))
@@ -331,7 +331,7 @@ class HarvestRepository:
         with self.session.begin():
             row = self.session.scalars(
                 insert(ItemRow)
-                .from_select(["job_id", "source_table_id", "dataset_id"], source)
+                .from_select(["job_id", "native_table_id", "table_id"], source)
                 .returning(ItemRow)
             ).one_or_none()
             if row is None:
@@ -366,8 +366,8 @@ class HarvestRepository:
                     status=status.value,
                     finished_at=func.now(),
                     error=_diagnostic(error),
-                    dataset_id=func.coalesce(
-                        literal(table_id, type_=ItemRow.dataset_id.type), ItemRow.dataset_id
+                    table_id=func.coalesce(
+                        literal(table_id, type_=ItemRow.table_id.type), ItemRow.table_id
                     ),
                 )
                 .returning(ItemRow)

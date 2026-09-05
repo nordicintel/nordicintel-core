@@ -245,8 +245,8 @@ def upgrade() -> None:
         "harvest_item",
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("job_id", sa.BigInteger(), nullable=False),
-        sa.Column("source_table_id", sa.Text(), nullable=False),
-        sa.Column("dataset_id", sa.Text(), nullable=True),
+        sa.Column("native_table_id", sa.Text(), nullable=False),
+        sa.Column("table_id", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), server_default=sa.text("'running'"), nullable=False),
         sa.Column(
             "started_at",
@@ -273,10 +273,10 @@ def upgrade() -> None:
             name=op.f("harvest_item_status_check"),
         ),
         sa.CheckConstraint(
-            "length(source_table_id) > 0", name=op.f("harvest_item_source_table_id_check")
+            "length(native_table_id) > 0", name=op.f("harvest_item_native_table_id_check")
         ),
         sa.ForeignKeyConstraint(
-            ["dataset_id"], ["table_registry.id"], name=op.f("harvest_item_dataset_id_fkey")
+            ["table_id"], ["table_registry.id"], name=op.f("harvest_item_table_id_fkey")
         ),
         sa.ForeignKeyConstraint(
             ["job_id"],
@@ -286,13 +286,13 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("harvest_item_pkey")),
         sa.UniqueConstraint(
-            "job_id", "source_table_id", name=op.f("harvest_item_job_id_source_table_id_key")
+            "job_id", "native_table_id", name=op.f("harvest_item_job_id_native_table_id_key")
         ),
     )
     op.create_index(
-        "harvest_item_dataset_idx",
+        "harvest_item_table_idx",
         "harvest_item",
-        ["dataset_id", sa.literal_column("started_at DESC")],
+        ["table_id", sa.literal_column("started_at DESC")],
         unique=False,
     )
     op.create_index(
@@ -420,7 +420,7 @@ def downgrade() -> None:
     op.drop_table("table_metadata")
     op.drop_table("table_language_state")
     op.drop_index("harvest_item_job_idx", table_name="harvest_item")
-    op.drop_index("harvest_item_dataset_idx", table_name="harvest_item")
+    op.drop_index("harvest_item_table_idx", table_name="harvest_item")
     op.drop_table("harvest_item")
     op.drop_index("dataset_provider_idx", table_name="table_registry")
     op.drop_table("table_registry")

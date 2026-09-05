@@ -57,6 +57,7 @@ Publisher timestamps remain source strings, distinct from local harvest timestam
 The native identity and controls are available through `get_table`; accepted language
 metadata is available through `get_language`. Adapters receive the native ID explicitly
 for live data. Adapters do not manufacture canonical IDs for newly discovered tables.
+Discovery entries and harvest items use the same `native_table_id` term.
 
 ## Persistence and ownership
 
